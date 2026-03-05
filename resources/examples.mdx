@@ -1,0 +1,207 @@
+---
+title: Examples
+description: Jupyter notebooks and code examples demonstrating AudioSeal usage
+---
+
+Learn how to use AudioSeal through interactive Jupyter notebooks and code examples. All examples are available in the [GitHub repository](https://github.com/facebookresearch/audioseal/tree/master/examples).
+
+## Getting Started
+
+### Getting Started Notebook
+
+<Card title="Getting_started.ipynb" icon="play" href="https://github.com/facebookresearch/audioseal/blob/master/examples/Getting_started.ipynb">
+  A comprehensive introduction to AudioSeal's core functionality. This notebook covers:
+  
+  - Loading and preparing audio files with torchaudio
+  - Watermark generation with the AudioSeal generator
+  - Adding watermarks to audio signals
+  - Embedding optional 16-bit messages
+  - Watermark detection at high and low levels
+  - Streaming support for real-time applications (AudioSeal 0.2+)
+  - Visualizing waveforms and spectrograms
+  
+  **Perfect for**: First-time users and understanding basic API usage
+</Card>
+
+<Note>
+  The Getting Started notebook includes detailed explanations and visualizations to help you understand how watermarking works at each step.
+</Note>
+
+### Google Colab Notebook
+
+<Card title="colab.ipynb" icon="notebook" href="https://colab.research.google.com/github/facebookresearch/audioseal/blob/master/examples/colab.ipynb">
+  A Colab-optimized notebook for watermarking custom audio, such as your own recorded voice.
+  
+  - Designed to run entirely in Google Colab
+  - Record audio directly in the browser
+  - Install all dependencies automatically
+  - Process and watermark custom audio files
+  - Play and download watermarked audio
+  
+  **Perfect for**: Quick experimentation without local setup
+</Card>
+
+<Warning>
+  When running in Colab, ensure you have GPU acceleration enabled (Runtime > Change runtime type > GPU) for faster processing.
+</Warning>
+
+## Advanced Examples
+
+### Attack Benchmarking
+
+<Card title="attack_benchmarking_example.ipynb" icon="shield" href="https://github.com/facebookresearch/audioseal/blob/master/examples/attack_benchmarking_example.ipynb">
+  Comprehensive guide to benchmarking AudioSeal's robustness against audio perturbations.
+  
+  This notebook demonstrates:
+  - Loading audio datasets (RAVDESS Emotional Speech Audio)
+  - Watermarking multiple audio files in batch
+  - Applying various attacks/perturbations:
+    - Compression (MP3, AAC)
+    - Re-encoding
+    - Noise addition
+    - Re-sampling
+    - Speed changes
+  - Detecting watermarks in attacked audio
+  - Measuring detection confidence and accuracy
+  - Generating performance metrics and plots
+  
+  **Perfect for**: Researchers evaluating watermark robustness and understanding attack resilience
+</Card>
+
+<Note>
+  The benchmarking notebook includes both manual and automatic dataset download options. You can use Kaggle API credentials for automated download or manually download the RAVDESS dataset.
+</Note>
+
+### Training Custom Models
+
+<Card title="BuildingCustomRecipe_ExampleNotebook.ipynb" icon="hammer" href="https://github.com/facebookresearch/audioseal/blob/master/examples/BuildingCustomRecipe_ExampleNotebook.ipynb">
+  Step-by-step guide to training your own AudioSeal watermarking model using AudioCraft and Dora.
+  
+  Topics covered:
+  - Installing dependencies (AudioCraft, Dora, Hydra)
+  - Preparing training datasets (LibriSpeech example)
+  - Configuring model architecture and hyperparameters
+  - Setting up training jobs with Dora grid search
+  - Running training experiments
+  - Evaluating trained models
+  - Exporting and using custom checkpoints
+  
+  **Perfect for**: Advanced users who need custom watermarking models for specific use cases
+</Card>
+
+<Warning>
+  Training custom models requires significant computational resources. We recommend using a GPU with at least 16GB of memory and sufficient storage for datasets.
+</Warning>
+
+## Supporting Files
+
+The examples directory also includes helper scripts:
+
+### notebook.py
+Utility functions used across notebooks:
+- `play_audio()`: Play audio in Jupyter/Colab
+- `plot_waveform_and_specgram()`: Visualize audio signals
+- Audio format conversion helpers
+
+### attacks.py
+Implementations of various audio perturbations for benchmarking:
+- Compression attacks (MP3, AAC, Opus)
+- Additive noise (Gaussian, uniform)
+- Re-sampling and bit depth reduction
+- Speed and pitch modifications
+- Filtering and equalization
+
+## Running the Examples
+
+### Local Setup
+
+To run examples locally:
+
+```bash
+# Clone the repository
+git clone https://github.com/facebookresearch/audioseal
+cd audioseal
+
+# Install AudioSeal and dependencies
+pip install -e .
+pip install jupyter torchaudio matplotlib
+
+# Start Jupyter
+jupyter notebook examples/
+```
+
+### Google Colab
+
+Click the Colab badge in any notebook to open it directly in Google Colab:
+
+1. Open the [colab.ipynb](https://colab.research.google.com/github/facebookresearch/audioseal/blob/master/examples/colab.ipynb)
+2. Enable GPU acceleration: Runtime > Change runtime type > GPU
+3. Run cells sequentially
+
+<Note>
+  Some notebooks may require additional setup steps like downloading datasets or configuring API credentials. Follow the instructions in each notebook.
+</Note>
+
+## Code Snippets
+
+Quick reference for common operations:
+
+### Basic Watermarking
+
+```python
+from audioseal import AudioSeal
+import torch
+
+# Load models
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+
+# Watermark audio (batch, channels, samples)
+watermark = generator.get_watermark(wav)
+watermarked = wav + watermark
+
+# Detect watermark
+result, message = detector.detect_watermark(watermarked)
+print(f"Watermark confidence: {result}")
+```
+
+### Streaming Watermarking
+
+```python
+from audioseal import AudioSeal
+
+generator = AudioSeal.load_generator("audioseal_wm_streaming")
+
+# Process audio stream
+with generator.streaming(batch_size=1):
+    for chunk in audio_chunks:
+        watermarked_chunk = generator(chunk, sample_rate=16000)
+        # Process or stream watermarked_chunk
+```
+
+### Batch Processing
+
+```python
+import torch
+from audioseal import AudioSeal
+
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+
+# Stack multiple audio files into batch
+audio_batch = torch.stack([audio1, audio2, audio3])
+
+# Watermark entire batch at once
+watermarks = generator.get_watermark(audio_batch)
+watermarked_batch = audio_batch + watermarks
+```
+
+## Additional Resources
+
+- **GitHub Repository**: [facebookresearch/audioseal](https://github.com/facebookresearch/audioseal)
+- **Training Documentation**: [TRAINING.md](https://github.com/facebookresearch/audioseal/blob/master/docs/TRAINING.md)
+- **Example Attacks**: [attacks.py](https://github.com/facebookresearch/audioseal/blob/master/examples/attacks.py)
+- **Model Cards**: [src/audioseal/cards/](https://github.com/facebookresearch/audioseal/tree/master/src/audioseal/cards)
+
+<Note>
+  All examples are maintained and updated with each AudioSeal release. Check the repository for the latest versions and any new examples.
+</Note>

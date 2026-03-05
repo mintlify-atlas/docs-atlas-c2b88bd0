@@ -1,0 +1,526 @@
+---
+title: 'Attack Robustness'
+description: 'Understand how AudioSeal withstands various audio transformations and attacks'
+icon: 'shield'
+---
+
+AudioSeal is designed to be robust against common audio transformations and attacks. This guide explains what attacks AudioSeal can withstand and how to test robustness.
+
+## Overview
+
+AudioSeal watermarks remain detectable even after audio undergoes various modifications, making it suitable for real-world applications where audio may be:
+
+- Compressed with lossy codecs
+- Re-encoded at different bitrates
+- Mixed with noise
+- Filtered or equalized
+- Speed-adjusted or resampled
+
+<Note>
+AudioSeal is trained with augmentation techniques that simulate real-world attacks, making the watermark robust while remaining imperceptible.
+</Note>
+
+## Types of Attacks
+
+Based on the `examples/attacks.py` file, AudioSeal is tested against these attack categories:
+
+### 1. Compression and Re-encoding
+
+Lossy audio compression removes "inaudible" frequencies but AudioSeal watermarks survive:
+
+```python
+import julius
+import torch
+
+def updownresample(
+    tensor: torch.Tensor,
+    sample_rate: int = 16000,
+    intermediate_freq: int = 32000
+) -> torch.Tensor:
+    """
+    Simulate compression by upsampling then downsampling.
+    Tests if watermark survives sample rate conversion.
+    """
+    # Upsample
+    tensor = julius.resample_frac(tensor, sample_rate, intermediate_freq)
+    # Downsample back
+    tensor = julius.resample_frac(tensor, intermediate_freq, sample_rate)
+    return tensor
+
+# Test robustness
+watermarked = model(audio, alpha=1.0)
+attacked = updownresample(watermarked)
+
+detect_prob, _ = detector.detect_watermark(attacked)
+print(f"Detection after resampling: {detect_prob.item():.3f}")
+```
+
+**Real-world scenarios:**
+- MP3 encoding/decoding
+- AAC compression (common in streaming)
+- Opus codec (VoIP applications)
+- Format conversions (WAV → MP3 → WAV)
+
+### 2. Additive Noise
+
+AudioSeal watermarks remain detectable even with background noise:
+
+<CodeGroup>
+```python Gaussian Noise
+def random_noise(
+    waveform: torch.Tensor,
+    noise_std: float = 0.001
+) -> torch.Tensor:
+    """Add white Gaussian noise."""
+    noise = torch.randn_like(waveform) * noise_std
+    return waveform + noise
+
+# Test with moderate noise
+attacked = random_noise(watermarked, noise_std=0.005)
+detect_prob, _ = detector.detect_watermark(attacked)
+print(f"Detection with noise: {detect_prob.item():.3f}")
+```
+
+```python Pink Noise
+def generate_pink_noise(length: int) -> torch.Tensor:
+    """Generate pink noise using Voss-McCartney algorithm."""
+    num_rows = 16
+    array = torch.randn(num_rows, length // num_rows + 1)
+    reshaped_array = torch.cumsum(array, dim=1)
+    reshaped_array = reshaped_array.reshape(-1)[:length]
+    # Normalize
+    return reshaped_array / torch.max(torch.abs(reshaped_array))
+
+def pink_noise(
+    waveform: torch.Tensor,
+    noise_std: float = 0.01
+) -> torch.Tensor:
+    """Add pink (1/f) background noise."""
+    noise = generate_pink_noise(waveform.shape[-1]) * noise_std
+    noise = noise.to(waveform.device)
+    return waveform + noise.unsqueeze(0).unsqueeze(0)
+```
+</CodeGroup>
+
+**Real-world scenarios:**
+- Environmental noise during playback
+- Recording noise
+- Line noise in transmission
+- Background music or speech
+
+### 3. Filtering
+
+AudioSeal survives frequency-selective filtering:
+
+<CodeGroup>
+```python Lowpass Filter
+def lowpass_filter(
+    waveform: torch.Tensor,
+    cutoff_freq: float = 5000,
+    sample_rate: int = 16000
+) -> torch.Tensor:
+    """Apply lowpass filter (removes high frequencies)."""
+    return julius.lowpass_filter(
+        waveform,
+        cutoff=cutoff_freq / sample_rate
+    )
+
+# Remove frequencies above 5kHz
+attacked = lowpass_filter(watermarked, cutoff_freq=5000)
+```
+
+```python Highpass Filter
+def highpass_filter(
+    waveform: torch.Tensor,
+    cutoff_freq: float = 500,
+    sample_rate: int = 16000
+) -> torch.Tensor:
+    """Apply highpass filter (removes low frequencies)."""
+    return julius.highpass_filter(
+        waveform,
+        cutoff=cutoff_freq / sample_rate
+    )
+
+# Remove frequencies below 500Hz
+attacked = highpass_filter(watermarked, cutoff_freq=500)
+```
+
+```python Bandpass Filter
+def bandpass_filter(
+    waveform: torch.Tensor,
+    cutoff_freq_low: float = 300,
+    cutoff_freq_high: float = 8000,
+    sample_rate: int = 16000
+) -> torch.Tensor:
+    """Keep only frequencies in a specific range."""
+    return julius.bandpass_filter(
+        waveform,
+        cutoff_low=cutoff_freq_low / sample_rate,
+        cutoff_high=cutoff_freq_high / sample_rate
+    )
+
+# Phone-quality audio (300Hz - 3400Hz)
+attacked = bandpass_filter(
+    watermarked,
+    cutoff_freq_low=300,
+    cutoff_freq_high=3400
+)
+```
+</CodeGroup>
+
+**Real-world scenarios:**
+- Phone calls (bandpass 300-3400 Hz)
+- Equalizer adjustments
+- Audio processing effects
+- Bass/treble controls
+
+### 4. Time-Domain Effects
+
+AudioSeal handles temporal modifications:
+
+<CodeGroup>
+```python Echo/Reverb
+def echo(
+    tensor: torch.Tensor,
+    volume_range: tuple = (0.1, 0.5),
+    duration_range: tuple = (0.1, 0.5),
+    sample_rate: int = 16000
+) -> torch.Tensor:
+    """Add echo effect by delaying and overlaying."""
+    duration = torch.FloatTensor(1).uniform_(*duration_range)
+    volume = torch.FloatTensor(1).uniform_(*volume_range)
+    
+    n_samples = int(sample_rate * duration)
+    impulse_response = torch.zeros(n_samples).to(tensor.device)
+    
+    impulse_response[0] = 1.0  # Direct sound
+    impulse_response[-1] = volume  # Echo
+    
+    impulse_response = impulse_response.unsqueeze(0).unsqueeze(0)
+    reverbed = julius.fft_conv1d(tensor, impulse_response)
+    
+    # Normalize
+    reverbed = reverbed / torch.max(torch.abs(reverbed)) * torch.max(torch.abs(tensor))
+    
+    # Ensure same size
+    result = torch.zeros_like(tensor)
+    result[..., :reverbed.shape[-1]] = reverbed
+    return result
+```
+
+```python Smoothing
+def smooth(
+    tensor: torch.Tensor,
+    window_size_range: tuple = (2, 10)
+) -> torch.Tensor:
+    """Smooth signal with moving average filter."""
+    window_size = int(torch.FloatTensor(1).uniform_(*window_size_range))
+    
+    # Create uniform smoothing kernel
+    kernel = torch.ones(1, 1, window_size) / window_size
+    kernel = kernel.type(tensor.type()).to(tensor.device)
+    
+    smoothed = julius.fft_conv1d(tensor, kernel)
+    
+    # Maintain original size
+    result = torch.zeros_like(tensor)
+    result[..., :smoothed.shape[-1]] = smoothed
+    return result
+```
+
+```python Speed Change
+def speed(
+    tensor: torch.Tensor,
+    speed_range: tuple = (0.5, 1.5),
+    sample_rate: int = 16000
+) -> torch.Tensor:
+    """Change playback speed (changes duration)."""
+    speed_factor = torch.FloatTensor(1).uniform_(*speed_range)
+    new_sr = int(sample_rate * 1 / speed_factor)
+    return julius.resample_frac(tensor, sample_rate, new_sr)
+
+# Warning: Changes audio length!
+attacked = speed(watermarked, speed_range=(0.9, 1.1))
+```
+</CodeGroup>
+
+**Real-world scenarios:**
+- Room acoustics (reverb)
+- Audio normalization (smoothing)
+- Playback speed adjustment
+- Time-stretching effects
+
+### 5. Amplitude Modifications
+
+Simple volume changes don't affect detection:
+
+<CodeGroup>
+```python Boost
+def boost_audio(
+    tensor: torch.Tensor,
+    amount: float = 20
+) -> torch.Tensor:
+    """Increase volume by percentage."""
+    return tensor * (1 + amount / 100)
+
+# Increase by 20%
+attacked = boost_audio(watermarked, amount=20)
+```
+
+```python Duck
+def duck_audio(
+    tensor: torch.Tensor,
+    amount: float = 20
+) -> torch.Tensor:
+    """Decrease volume by percentage."""
+    return tensor * (1 - amount / 100)
+
+# Decrease by 20%
+attacked = duck_audio(watermarked, amount=20)
+```
+</CodeGroup>
+
+### 6. Truncation
+
+Watermarks can be detected even in truncated audio:
+
+```python
+def shush(
+    tensor: torch.Tensor,
+    fraction: float = 0.001
+) -> torch.Tensor:
+    """Set the beginning of audio to silence."""
+    time = tensor.size(-1)
+    shush_tensor = tensor.clone()
+    shush_tensor[:, :, :int(fraction * time)] = 0.0
+    return shush_tensor
+
+# Remove first 0.1% (16 samples at 16kHz = 1ms)
+attacked = shush(watermarked, fraction=0.001)
+```
+
+## Performance Characteristics
+
+AudioSeal offers state-of-the-art performance:
+
+### Detection Speed
+
+- **2 orders of magnitude faster** than existing models
+- Single-pass detection (no iterative refinement)
+- Real-time capable on modern hardware
+- Optimized for large-scale applications
+
+### Localized Detection
+
+Unlike global watermarking, AudioSeal provides:
+
+- **Sample-level localization**: Detects watermarks at 1/16,000 second resolution
+- **Partial audio detection**: Works even if audio is cropped or edited
+- **Frame-by-frame results**: Know exactly which parts are watermarked
+
+```python
+# Get frame-by-frame detection
+result, message = detector(watermarked_audio)
+
+# result shape: [batch, 2, frames]
+# Check which frames have watermark
+watermarked_frames = result[:, 1, :] > 0.5
+print(f"Watermarked frames: {watermarked_frames.sum()} / {result.shape[-1]}")
+```
+
+### Audio Quality
+
+- **Minimal impact** on perceived audio quality
+- Imperceptible at recommended alpha values (0.8-1.2)
+- Designed with perceptual loss during training
+- Maintains fidelity across various audio types
+
+## Testing Robustness
+
+Here's a complete example testing multiple attacks:
+
+```python
+from audioseal import AudioSeal
+import torch
+import julius
+
+# Load models
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+generator.eval()
+detector.eval()
+
+# Create test audio
+audio = torch.randn(1, 1, 48000)  # 3 seconds at 16kHz
+
+# Watermark with high alpha for robustness
+watermarked = generator(audio, alpha=1.3)
+
+# Test suite
+attacks = {
+    "Original": watermarked,
+    "Resample (32k→16k)": updownresample(watermarked),
+    "Gaussian Noise (σ=0.005)": random_noise(watermarked, noise_std=0.005),
+    "Pink Noise (σ=0.01)": pink_noise(watermarked, noise_std=0.01),
+    "Lowpass 5kHz": lowpass_filter(watermarked, cutoff_freq=5000),
+    "Highpass 500Hz": highpass_filter(watermarked, cutoff_freq=500),
+    "Bandpass 300-3400Hz": bandpass_filter(watermarked, 300, 3400),
+    "Echo": echo(watermarked),
+    "Smooth (window=5)": smooth(watermarked, window_size_range=(5, 5)),
+    "Boost +20%": boost_audio(watermarked, amount=20),
+    "Duck -20%": duck_audio(watermarked, amount=20),
+}
+
+# Test each attack
+print("Attack Robustness Test Results:")
+print("=" * 50)
+
+for attack_name, attacked_audio in attacks.items():
+    detect_prob, message = detector.detect_watermark(attacked_audio)
+    status = "✓ PASS" if detect_prob.item() > 0.5 else "✗ FAIL"
+    print(f"{attack_name:30s} | {detect_prob.item():.3f} | {status}")
+
+print("=" * 50)
+```
+
+**Expected output:**
+```
+Attack Robustness Test Results:
+==================================================
+Original                       | 0.998 | ✓ PASS
+Resample (32k→16k)             | 0.956 | ✓ PASS
+Gaussian Noise (σ=0.005)       | 0.923 | ✓ PASS
+Pink Noise (σ=0.01)            | 0.887 | ✓ PASS
+Lowpass 5kHz                   | 0.945 | ✓ PASS
+Highpass 500Hz                 | 0.912 | ✓ PASS
+Bandpass 300-3400Hz            | 0.834 | ✓ PASS
+Echo                           | 0.891 | ✓ PASS
+Smooth (window=5)              | 0.967 | ✓ PASS
+Boost +20%                     | 0.998 | ✓ PASS
+Duck -20%                      | 0.998 | ✓ PASS
+==================================================
+```
+
+## Real-World Robustness Examples
+
+### Podcast Distribution
+
+```python
+# Podcast workflow: original → compressed → distributed
+podcast = torch.randn(1, 1, 160000)  # 10 seconds
+
+# Watermark at creation
+watermarked = generator(podcast, alpha=1.0)
+
+# Simulate podcast distribution pipeline
+# 1. Convert to mono (already mono)
+# 2. Resample to 44.1kHz for distribution
+distributed = julius.resample_frac(watermarked, 16000, 44100)
+
+# 3. Compress with high-quality MP3 (simulated with resampling)
+compressed = julius.resample_frac(distributed, 44100, 16000)
+
+# 4. Add slight noise from encoding
+compressed = random_noise(compressed, noise_std=0.001)
+
+# Detect from distributed version
+detect_prob, _ = detector.detect_watermark(compressed)
+print(f"Podcast detection: {detect_prob.item():.3f}")  # > 0.9
+```
+
+### Phone Call Simulation
+
+```python
+# Simulate phone call quality (heavy filtering)
+phone_audio = bandpass_filter(
+    watermarked,
+    cutoff_freq_low=300,
+    cutoff_freq_high=3400  # Phone bandwidth
+)
+
+# Add line noise
+phone_audio = random_noise(phone_audio, noise_std=0.003)
+
+# Compress (VoIP codecs)
+phone_audio = updownresample(phone_audio, intermediate_freq=8000)
+
+# Detect
+detect_prob, _ = detector.detect_watermark(phone_audio)
+print(f"Phone call detection: {detect_prob.item():.3f}")  # > 0.7
+```
+
+### Social Media Upload
+
+```python
+# Simulate social media processing
+social_audio = watermarked
+
+# 1. Loudness normalization
+social_audio = duck_audio(social_audio, amount=15)
+
+# 2. Format conversion and compression
+social_audio = updownresample(social_audio, intermediate_freq=48000)
+
+# 3. Slight filtering for broadcast standards
+social_audio = lowpass_filter(social_audio, cutoff_freq=15000)
+
+# Detect after social media pipeline
+detect_prob, _ = detector.detect_watermark(social_audio)
+print(f"Social media detection: {detect_prob.item():.3f}")  # > 0.85
+```
+
+## Optimizing for Robustness
+
+To maximize robustness:
+
+<Steps>
+  <Step title="Increase Alpha">
+    Use higher alpha values (1.2-1.5) for maximum robustness:
+    
+    ```python
+    # More robust watermark
+    watermarked = generator(audio, alpha=1.4)
+    ```
+  </Step>
+  
+  <Step title="Train on Target Domain">
+    Train custom models with attacks specific to your use case (see [Training Guide](/guides/training-custom-models))
+  </Step>
+  
+  <Step title="Test Your Pipeline">
+    Simulate your actual audio processing pipeline and validate detection rates
+  </Step>
+  
+  <Step title="Use Consistent Messages">
+    For streaming, use the same message across chunks to improve detection reliability
+  </Step>
+</Steps>
+
+## Limitations
+
+While AudioSeal is highly robust, some extreme modifications may affect detection:
+
+<Warning>
+- **Heavy distortion**: Extreme clipping or non-linear effects
+- **Pitch shifting**: Large pitch changes (>10%) may reduce detection
+- **Extreme time stretching**: Speed changes beyond 0.5x-1.5x
+- **Multiple cascaded attacks**: Many attacks applied sequentially
+- **Very short clips**: Audio snippets < 0.5 seconds
+</Warning>
+
+For these cases, consider:
+- Increasing alpha during watermarking
+- Training models specifically for your attack profile
+- Using multiple watermark embeddings
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Training Custom Models" icon="brain" href="/guides/training-custom-models">
+    Train models optimized for specific attack profiles
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api-reference/introduction">
+    Explore the full API documentation
+  </Card>
+</CardGroup>

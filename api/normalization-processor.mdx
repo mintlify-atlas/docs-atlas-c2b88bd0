@@ -1,0 +1,326 @@
+---
+title: 'NormalizationProcessor'
+description: 'Audio normalization for improved watermark imperceptibility'
+icon: 'sliders'
+---
+
+## Overview
+
+The `NormalizationProcessor` class provides audio normalization utilities that improve watermark imperceptibility and detection robustness. It includes methods for fitting watermarks within audio envelopes and normalizing loudness levels.
+
+## Initialization
+
+```python
+from audioseal.models import NormalizationProcessor
+
+normalizer = NormalizationProcessor(
+    window_size=5,
+    reference_rms=0.1
+)
+```
+
+### Parameters
+
+<ParamField path="window_size" type="int" default="5">
+  Size of the processing window in samples. Smaller windows provide finer-grained control but may introduce artifacts. Typical values range from 3 to 10.
+</ParamField>
+
+<ParamField path="reference_rms" type="float" default="0.1">
+  Reference RMS (root mean square) value for loudness normalization. Audio will be scaled to match this target RMS level.
+</ParamField>
+
+## Methods
+
+### compute_rms
+
+Compute the root mean square (RMS) energy of an audio signal.
+
+```python
+import torch
+
+audio = torch.randn(1, 1, 16000)  # 1 second at 16kHz
+rms = normalizer.compute_rms(audio)
+print(f"RMS energy: {rms.item():.4f}")
+```
+
+#### Parameters
+
+<ParamField path="signal" type="torch.Tensor" required>
+  Input audio tensor of shape `(batch, channels, timesteps)`.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="rms" type="torch.Tensor">
+  RMS value tensor of shape `(batch, channels, 1)`. Represents the energy level of the signal.
+</ResponseField>
+
+#### Example
+
+```python
+import torch
+import torchaudio
+from audioseal.models import NormalizationProcessor
+
+normalizer = NormalizationProcessor()
+
+# Load audio
+audio, sr = torchaudio.load("audio.wav")
+
+# Compute RMS
+rms = normalizer.compute_rms(audio)
+
+print(f"Audio RMS: {rms.item():.4f}")
+print(f"Audio dB: {20 * torch.log10(rms).item():.2f} dB")
+```
+
+---
+
+### fit_inside_envelope
+
+Normalize a watermark signal to fit inside the envelope of the original audio.
+
+```python
+# Ensure watermark doesn't exceed audio envelope
+normalized_watermark = normalizer.fit_inside_envelope(
+    wav1=original_audio,
+    wav2=watermark
+)
+```
+
+#### Parameters
+
+<ParamField path="wav1" type="torch.Tensor" required>
+  Reference audio tensor of shape `(batch, channels, timesteps)`. This defines the target envelope that `wav2` should fit within.
+</ParamField>
+
+<ParamField path="wav2" type="torch.Tensor" required>
+  Signal to be normalized of shape `(batch, channels, timesteps)`. Typically the watermark signal that needs to be scaled down.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="normalized_signal" type="torch.Tensor">
+  Normalized version of `wav2` with shape `(batch, channels, timesteps)`. The signal is scaled to fit within the envelope of `wav1`.
+</ResponseField>
+
+#### How It Works
+
+1. **Windowing**: Divides both signals into overlapping windows using a Hann window for smooth transitions
+2. **RMS Computation**: Calculates RMS for each window in both signals
+3. **Gain Calculation**: Computes gain to fit `wav2` inside `wav1`'s envelope (clamped between 0.01 and 1.0)
+4. **Application**: Applies gain to each window with Hann window weighting
+5. **Reconstruction**: Reconstructs the signal using overlap-add
+
+#### Example
+
+```python
+import torch
+import torchaudio
+from audioseal.models import NormalizationProcessor
+
+normalizer = NormalizationProcessor(window_size=5)
+
+# Load audio and generate watermark
+audio, sr = torchaudio.load("audio.wav")
+watermark = torch.randn_like(audio) * 0.1  # Random watermark
+
+# Fit watermark inside audio envelope
+normalized_watermark = normalizer.fit_inside_envelope(
+    wav1=audio,
+    wav2=watermark
+)
+
+# Apply normalized watermark
+watermarked = audio + normalized_watermark
+
+# Save result
+torchaudio.save("watermarked.wav", watermarked, sr)
+
+print(f"Original watermark RMS: {normalizer.compute_rms(watermark).item():.4f}")
+print(f"Normalized watermark RMS: {normalizer.compute_rms(normalized_watermark).item():.4f}")
+print(f"Audio RMS: {normalizer.compute_rms(audio).item():.4f}")
+```
+
+---
+
+### loudness_normalization
+
+Normalize the loudness of an audio signal to match a reference RMS level.
+
+```python
+# Normalize audio to consistent loudness
+normalized_audio = normalizer.loudness_normalization(audio)
+```
+
+#### Parameters
+
+<ParamField path="wav" type="torch.Tensor" required>
+  Input audio tensor of shape `(batch, channels, timesteps)` to be normalized.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="normalized_audio" type="torch.Tensor">
+  Loudness-normalized audio of shape `(batch, channels, timesteps)`. The RMS level is adjusted to match the reference RMS value.
+</ResponseField>
+
+#### How It Works
+
+1. **Windowing**: Divides signal into overlapping windows with Hann window
+2. **RMS Computation**: Calculates RMS for each window
+3. **Gain Calculation**: Computes gain to achieve reference RMS (clamped between 1.0 and 10.0)
+4. **Application**: Applies gain to each window with Hann window weighting
+5. **Reconstruction**: Reconstructs using overlap-add
+
+#### Example
+
+```python
+import torch
+import torchaudio
+from audioseal.models import NormalizationProcessor
+
+# Create normalizer with target RMS
+normalizer = NormalizationProcessor(
+    window_size=5,
+    reference_rms=0.1
+)
+
+# Load audio files with different loudness levels
+audio1, sr = torchaudio.load("quiet_audio.wav")
+audio2, sr = torchaudio.load("loud_audio.wav")
+
+print(f"Audio 1 RMS: {normalizer.compute_rms(audio1).item():.4f}")
+print(f"Audio 2 RMS: {normalizer.compute_rms(audio2).item():.4f}")
+
+# Normalize both to same loudness
+norm_audio1 = normalizer.loudness_normalization(audio1)
+norm_audio2 = normalizer.loudness_normalization(audio2)
+
+print(f"Normalized audio 1 RMS: {normalizer.compute_rms(norm_audio1).item():.4f}")
+print(f"Normalized audio 2 RMS: {normalizer.compute_rms(norm_audio2).item():.4f}")
+
+# Both should now have similar RMS values close to 0.1
+```
+
+## Attributes
+
+<ResponseField name="window_size" type="int">
+  Size of the processing window used for normalization.
+</ResponseField>
+
+<ResponseField name="reference_rms" type="float">
+  Target RMS value for loudness normalization.
+</ResponseField>
+
+## Integration in AudioSeal
+
+The `NormalizationProcessor` is optionally used in both generator and detector:
+
+### In AudioSealWM (Generator)
+
+```python
+# After generating watermark
+watermark = self.decoder(hidden)
+
+# Fit watermark inside audio envelope
+if self.normalizer is not None:
+    watermark = self.normalizer.fit_inside_envelope(x, watermark)
+```
+
+### In AudioSealDetector (Detector)
+
+```python
+# Before detection
+if self.normalizer is not None:
+    x = self.normalizer.loudness_normalization(x)
+
+result = self.detector(x)
+```
+
+## Complete Example
+
+```python
+import torch
+import torchaudio
+from audioseal.models import NormalizationProcessor
+
+# Initialize normalizer
+normalizer = NormalizationProcessor(
+    window_size=5,
+    reference_rms=0.1
+)
+
+# Load original audio
+audio, sr = torchaudio.load("audio.wav")
+print(f"Original audio RMS: {normalizer.compute_rms(audio).item():.4f}")
+
+# Step 1: Normalize audio loudness for consistent processing
+normalized_audio = normalizer.loudness_normalization(audio)
+print(f"Normalized audio RMS: {normalizer.compute_rms(normalized_audio).item():.4f}")
+
+# Step 2: Generate a watermark signal (simulated)
+watermark = torch.randn_like(audio) * 0.2
+print(f"Raw watermark RMS: {normalizer.compute_rms(watermark).item():.4f}")
+
+# Step 3: Fit watermark inside audio envelope
+fitted_watermark = normalizer.fit_inside_envelope(
+    wav1=normalized_audio,
+    wav2=watermark
+)
+print(f"Fitted watermark RMS: {normalizer.compute_rms(fitted_watermark).item():.4f}")
+
+# Step 4: Apply watermark
+watermarked = normalized_audio + fitted_watermark
+
+# Save results
+torchaudio.save("normalized.wav", normalized_audio, sr)
+torchaudio.save("watermarked.wav", watermarked, sr)
+
+print("\nProcessing complete!")
+print(f"Final watermarked audio RMS: {normalizer.compute_rms(watermarked).item():.4f}")
+```
+
+## Use Cases
+
+### Imperceptible Watermarking
+
+```python
+# Ensure watermark never exceeds audio signal
+normalizer = NormalizationProcessor(window_size=5)
+watermark = normalizer.fit_inside_envelope(audio, raw_watermark)
+```
+
+### Robust Detection
+
+```python
+# Normalize loudness before detection for consistency
+normalizer = NormalizationProcessor(reference_rms=0.1)
+normalized = normalizer.loudness_normalization(audio_to_detect)
+result = detector(normalized)
+```
+
+### Audio Preprocessing
+
+```python
+# Standardize audio files to same loudness level
+normalizer = NormalizationProcessor(reference_rms=0.15)
+for audio_file in audio_files:
+    audio, sr = torchaudio.load(audio_file)
+    normalized = normalizer.loudness_normalization(audio)
+    torchaudio.save(f"normalized_{audio_file}", normalized, sr)
+```
+
+## Technical Notes
+
+- **Overlap-Add**: Uses 50% overlap between windows for smooth reconstruction
+- **Hann Windowing**: Applies Hann window to avoid boundary artifacts
+- **Gain Limiting**: Clamps gain values to prevent extreme amplification or attenuation
+- **TorchScript Support**: Methods are JIT-exportable for optimized inference
+- **Eager Mode Only**: `fit_inside_envelope` only works in eager mode (not with `torch.jit.script`)
+
+## See Also
+
+- [AudioSealWM](/api/generator) - Generator that uses normalization
+- [AudioSealDetector](/api/detector) - Detector that uses normalization
+- [Attack Robustness Guide](/guides/attack-robustness) - Handling audio modifications

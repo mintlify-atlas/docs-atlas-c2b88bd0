@@ -1,0 +1,329 @@
+---
+title: 'Watermark Generation'
+description: 'How AudioSeal generates imperceptible audio watermarks'
+icon: 'wand-magic-sparkles'
+---
+
+## Overview
+
+The AudioSeal generator (`AudioSealWM` class) creates imperceptible watermark signals that can be added to audio. The watermark has the same length as the input audio and is designed to be robust to various audio transformations.
+
+## Generator Architecture
+
+The generator consists of three main components working in sequence:
+
+### 1. SEANet Encoder
+
+The encoder compresses the audio signal into a latent representation:
+
+```python
+# Input: audio tensor of shape (batch, channels, samples)
+# Output: latent tensor of shape (batch, dimension, frames)
+hidden = self.encoder(x)
+```
+
+**Key Features:**
+- Temporal downsampling through strided convolutions
+- Residual blocks with dilated convolutions for receptive field
+- Default ratios: `[8, 5, 4, 2]` → 320x compression (16 kHz audio to 50 Hz latent)
+
+<Note>
+  The encoder reduces the temporal dimension significantly, enabling efficient processing of long audio sequences.
+</Note>
+
+### 2. Message Processor (Optional)
+
+If a secret message is provided, it's embedded into the latent representation:
+
+```python
+# From audioseal/models.py:54
+def forward(self, hidden: torch.Tensor, msg: torch.Tensor) -> torch.Tensor:
+    """
+    Build the embedding map: 2 x k -> k x h, then sum on the first dim
+    Args:
+        hidden: The encoder output, size: batch x hidden x frames
+        msg: The secret message, size: batch x k (k=16 for standard model)
+    """
+    # Create indices to take from embedding layer
+    indices = 2 * torch.arange(msg.shape[-1]).to(hidden.device)
+    indices = indices.repeat(msg.shape[0], 1)  # b x k
+    indices = (indices + msg).long()
+    msg_aux = self.msg_processor(indices)  # b x k -> b x k x h
+    msg_aux = msg_aux.sum(dim=-2)  # b x k x h -> b x h
+    msg_aux = msg_aux.unsqueeze(-1).repeat(
+        1, 1, hidden.shape[2]
+    )  # b x h -> b x h x frames
+    hidden = hidden + msg_aux  # Add to encoder output
+    return hidden
+```
+
+**How It Works:**
+<Steps>
+  <Step title="Message to Indices">
+    Convert 16-bit binary message to embedding indices (0-31)
+  </Step>
+  <Step title="Embedding Lookup">
+    Map each bit to a learned hidden vector
+  </Step>
+  <Step title="Aggregate">
+    Sum embeddings across all bits
+  </Step>
+  <Step title="Broadcast">
+    Repeat across time dimension
+  </Step>
+  <Step title="Add to Hidden">
+    Add message representation to encoder output
+  </Step>
+</Steps>
+
+<Info>
+  The message embedding uses a learned `torch.nn.Embedding` layer with `2 * nbits` entries, allowing the model to learn optimal representations for each bit value.
+</Info>
+
+### 3. SEANet Decoder
+
+The decoder upsamples the latent representation back to audio rate:
+
+```python
+# Input: latent tensor (batch, dimension, frames)
+# Output: watermark signal (batch, channels, samples)
+watermark = self.decoder(hidden)[..., :length]
+```
+
+**Key Features:**
+- Transposed convolutions for temporal upsampling
+- Matches the downsampling ratios of the encoder
+- Trimmed to exact input length
+- Optional final activation (e.g., tanh) for bounded output
+
+## Normalization and Envelope Fitting
+
+A critical component for imperceptibility is the `NormalizationProcessor`, which ensures the watermark fits within the audio's natural envelope:
+
+### Envelope Fitting Process
+
+```python
+# From audioseal/models.py:111
+def fit_inside_envelope(
+    self, wav1: torch.Tensor, wav2: torch.Tensor
+) -> torch.Tensor:
+    """
+    Normalizes wav2 to fit inside the envelope defined by wav1.
+    """
+```
+
+<AccordionGroup>
+  <Accordion title="Step-by-Step Process">
+    1. **Window the Signals**: Divide both audio and watermark into overlapping windows (window_size=5, overlap=50%)
+    
+    2. **Compute RMS**: Calculate root mean square energy for each window
+    ```python
+    rms_wav1 = torch.sqrt(torch.mean(unfolded_wav1**2, dim=-1, keepdim=True))
+    rms_wav2 = torch.sqrt(torch.mean(unfolded_wav2**2, dim=-1, keepdim=True))
+    ```
+    
+    3. **Calculate Gain**: Determine scaling factor to fit watermark under audio envelope
+    ```python
+    gain = rms_wav1 / (rms_wav2 + 1e-8)
+    gain = torch.clamp(gain, min=1e-2, max=1.0)  # Limit to [0.01, 1.0]
+    ```
+    
+    4. **Apply Hann Window**: Smooth transitions between windows
+    ```python
+    normalized_segment = unfolded_wav2 * gain * hann_window
+    ```
+    
+    5. **Reconstruct**: Use torch.nn.Fold to reconstruct the normalized signal
+  </Accordion>
+  
+  <Accordion title="Why This Matters">
+    - **Imperceptibility**: Watermark is scaled to be quieter than the original audio
+    - **Adaptive**: Different scaling for different parts of the audio (louder during loud sections, quieter during quiet sections)
+    - **Smooth**: Hann windowing prevents audible artifacts at window boundaries
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  The envelope fitting is only available in eager mode (not torch.jit.script) due to the complexity of the Fold operation.
+</Warning>
+
+## Complete Generation Process
+
+Here's the full workflow of the `get_watermark` method:
+
+```python
+# From audioseal/models.py:281
+@torch.jit.export
+def get_watermark(
+    self,
+    x: torch.Tensor,
+    sample_rate: Optional[int] = None,
+    message: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Generate watermark from audio and optional message."""
+    
+    length = x.size(-1)
+    
+    # Step 1: Encode audio to latent
+    hidden = self.encoder(x)
+    
+    # Step 2: Embed message if provided
+    if self.msg_processor is not None:
+        if message is None:
+            message = self.random_message(x.shape[0])
+        elif message.ndim == 1:
+            message = message.unsqueeze(0).repeat(x.shape[0], 1)
+        hidden = self.msg_processor(hidden, message)
+    
+    # Step 3: Decode to watermark signal
+    watermark = self.decoder(hidden)[..., :length]
+    
+    # Step 4: Fit inside envelope (optional)
+    if self.normalizer is not None and not torch.jit.is_scripting():
+        watermark = self.normalizer.fit_inside_envelope(x, watermark)
+    
+    return watermark
+```
+
+## Usage Examples
+
+### Basic Watermark Generation
+
+```python
+from audioseal import AudioSeal
+
+# Load generator
+model = AudioSeal.load_generator("audioseal_wm_16bits")
+model.eval()
+
+# Generate watermark for audio
+# audio shape: (batch, channels, samples)
+watermark = model.get_watermark(audio)
+
+# Add to audio
+watermarked_audio = audio + watermark
+```
+
+### With Custom Message
+
+```python
+import torch
+
+# Create a 16-bit message (e.g., model version ID)
+message = torch.tensor([1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1])  # 16 bits
+
+# Generate watermark with message
+watermark = model.get_watermark(audio, message=message)
+watermarked_audio = audio + watermark
+```
+
+### With Alpha Scaling
+
+```python
+# Control watermark strength (default alpha=1.0)
+alpha = 0.8  # Reduce watermark strength to 80%
+watermarked_audio = model(audio, alpha=alpha, message=message)
+```
+
+<Tip>
+  Adjusting `alpha` allows you to trade off between imperceptibility and robustness. Lower values are more imperceptible but may be less robust to attacks.
+</Tip>
+
+### Streaming Mode
+
+```python
+# For real-time watermarking
+model = AudioSeal.load_generator("audioseal_wm_streaming")
+model.eval()
+
+audio_chunks = [chunk1, chunk2, chunk3, ...]  # Streaming audio
+watermarked_chunks = []
+
+with model.streaming(batch_size=1):
+    for chunk in audio_chunks:
+        # Process each chunk with convolutional caching
+        watermarked_chunk = model(chunk, alpha=1.0)
+        watermarked_chunks.append(watermarked_chunk)
+
+watermarked_audio = torch.cat(watermarked_chunks, dim=-1)
+```
+
+<Info>
+  The `streaming()` context manager enables convolutional caching, allowing efficient processing of audio streams without redundant computation.
+</Info>
+
+## Design Choices
+
+### Why Encoder-Decoder Architecture?
+
+<CardGroup cols={2}>
+  <Card title="Efficiency" icon="gauge-high">
+    Processing in compressed latent space is much faster than operating directly on audio samples
+  </Card>
+  <Card title="Receptive Field" icon="eye">
+    Encoder captures long-range context, allowing watermark to adapt to audio characteristics
+  </Card>
+  <Card title="Imperceptibility" icon="sparkles">
+    Latent representation enables learning perceptually-aware watermarks
+  </Card>
+  <Card title="Message Embedding" icon="message">
+    Easy to inject message information in the compact latent space
+  </Card>
+</CardGroup>
+
+### Why Envelope Fitting?
+
+Without envelope fitting, the watermark might be:
+- **Too loud** in quiet sections → audible artifacts
+- **Too quiet** in loud sections → reduced robustness
+
+Envelope fitting ensures the watermark is **adaptive** and maintains consistent perceptual impact across the audio.
+
+## Technical Specifications
+
+| Parameter | Default Value | Description |
+|-----------|---------------|-------------|
+| `channels` | 1 | Number of audio channels (mono) |
+| `dimension` | 128 | Latent representation size |
+| `n_filters` | 32 | Base channel width |
+| `n_residual_layers` | 3 | Residual blocks per stage |
+| `ratios` | [8, 5, 4, 2] | Temporal compression ratios |
+| `nbits` | 16 | Message length in bits |
+| `window_size` | 5 | Envelope fitting window size |
+| `reference_rms` | 0.1 | Loudness normalization target |
+
+## Performance Considerations
+
+<AccordionGroup>
+  <Accordion title="Memory Usage">
+    - Encoder latent: ~320x smaller than input audio
+    - Batch processing supported for multiple files
+    - Gradient checkpointing available during training
+  </Accordion>
+  
+  <Accordion title="Speed">
+    - Real-time factor: ~0.1x (10x faster than real-time on GPU)
+    - Streaming mode: minimal latency with convolutional caching
+    - Batch processing: linear speedup with batch size
+  </Accordion>
+  
+  <Accordion title="Compatibility">
+    - Supports any sample rate (trained on 16 kHz)
+    - Works with mono and stereo audio
+    - TorchScript compatible (except envelope fitting)
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Detection" icon="magnifying-glass" href="/concepts/watermark-detection">
+    Learn how to detect watermarks
+  </Card>
+  <Card title="Localization" icon="location-crosshairs" href="/concepts/localized-watermarking">
+    Understand sample-level precision
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference/generator">
+    Full API documentation
+  </Card>
+</CardGroup>

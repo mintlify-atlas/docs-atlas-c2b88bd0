@@ -1,97 +1,102 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "AudioSeal Documentation"
+description: "Localized watermarking for AI-generated speech with state-of-the-art robustness and fast detection"
 ---
 
-## Setting up
+<div className="bg-gradient-to-r from-[#2a4d73] to-[#2a4d6d] text-[#d9d9d9] rounded-lg p-12 mb-8">
+  <h1 className="text-4xl font-bold mb-4 text-white">AudioSeal</h1>
+  <p className="text-xl mb-6">Efficient localized audio watermarking for AI-generated speech with state-of-the-art robustness and ultra-fast detection</p>
+  <div className="flex gap-4">
+    <a href="/quickstart" className="inline-block bg-[#ffcc33] text-black px-6 py-3 rounded font-semibold hover:opacity-90 transition">
+      Get Started
+    </a>
+    <a href="https://github.com/facebookresearch/audioseal" className="inline-block bg-[#2a4d6d] text-white px-6 py-3 rounded font-semibold hover:opacity-90 transition border border-white/20">
+      View on GitHub
+    </a>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+## What is AudioSeal?
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+AudioSeal is a novel audio watermarking system designed for AI-generated speech. It uses **localized watermarking** at the sample level and a perceptual loss function to embed imperceptible watermarks that can be detected even in edited or compressed audio.
 
-## Make it yours
+The system consists of two neural network components:
+- **Generator**: Embeds watermarks into audio signals with minimal quality impact
+- **Detector**: Identifies watermark fragments in long or edited audio files with exceptional speed
 
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={3}>
+  <Card title="Sample-Level Precision" icon="waveform">
+    Watermarks at 1/16,000 second granularity
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Ultra-Fast Detection" icon="bolt">
+    2 orders of magnitude faster than existing models
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Robust & Reliable" icon="shield">
+    Survives compression, re-encoding, and noise
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Key Features
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Localized Watermarking" icon="location-dot" href="/concepts/localized-watermarking">
+    Watermark individual samples at 1/16,000 second intervals for precise tracking and detection
+  </Card>
+  <Card title="Minimal Audio Impact" icon="volume">
+    Imperceptible watermarks that preserve the original audio quality
+  </Card>
+  <Card title="Streaming Support" icon="stream" href="/guides/streaming-support">
+    Real-time watermarking for live audio applications with low latency
+  </Card>
+  <Card title="Secret Messages" icon="message" href="/guides/secret-messages">
+    Optional 16-bit message embedding for model version tracking or metadata
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Quick Example
 
-## Need inspiration?
+```python
+from audioseal import AudioSeal
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+# Load generator and detector models
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+
+# Watermark your audio
+watermark = generator.get_watermark(audio_tensor)
+watermarked_audio = audio_tensor + watermark
+
+# Detect watermarks
+result, message = detector.detect_watermark(watermarked_audio)
+print(f"Detection probability: {result}")
+```
+
+## Get Started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install AudioSeal via pip or from source
+  </Card>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+    Embed and detect your first watermark in minutes
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/how-it-works">
+    Learn how AudioSeal's watermarking technology works
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/audioseal">
+    Explore the complete API documentation
+  </Card>
+</CardGroup>
+
+## Research & Resources
+
+AudioSeal was developed by Meta's Fundamental AI Research (FAIR) team and published at ICML 2024.
+
+- [Research Paper (arXiv)](https://arxiv.org/abs/2401.17264)
+- [Hugging Face Models](https://huggingface.co/facebook/audioseal)
+- [Colab Notebook](https://colab.research.google.com/github/facebookresearch/audioseal/blob/master/examples/colab.ipynb)
+- [Project Webpage](https://pierrefdz.github.io/publications/audioseal/)
+
+<Note>
+AudioSeal is available under the MIT license and can be used in both research and commercial applications.
+</Note>

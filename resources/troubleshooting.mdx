@@ -1,0 +1,222 @@
+---
+title: Troubleshooting
+description: Common issues and solutions when working with AudioSeal
+---
+
+This page covers common issues you might encounter when using AudioSeal and how to resolve them.
+
+## Common Errors
+
+<Accordion title="ValueError: not enough values to unpack (expected 3, got 2)">
+  **Problem**: This error occurs when passing audio tensors without the required batch dimension.
+
+  **Solution**: AudioSeal expects a batch of audio tensors as input. Add a batch dimension to your input tensor:
+
+  ```python
+  # If your audio tensor has shape (channels, samples)
+  wav = wav.unsqueeze(0)  # Now it has shape (batch, channels, samples)
+  
+  # Example usage
+  watermark = model.get_watermark(wav.unsqueeze(0))
+  ```
+
+  See the [Getting Started notebook](https://github.com/facebookresearch/audioseal/blob/master/examples/Getting_started.ipynb) for complete examples.
+</Accordion>
+
+<Accordion title="KeyError: Environment variable 'USER' not found (Windows)">
+  **Problem**: On Windows machines, you may encounter this error due to an old checkpoint that's not compatible with Windows.
+
+  **Solution**: Invalidate the cache by removing the cached files and re-running:
+
+  1. Navigate to `C:\Users\<USER>\.cache\audioseal`
+  2. Delete all files in this directory
+  3. Run your code again to re-download the checkpoint
+
+  <Note>
+    This issue occurs with older checkpoint versions uploaded to the model hub. Clearing the cache will download the updated, Windows-compatible version.
+  </Note>
+</Accordion>
+
+<Accordion title="Couldn't find appropriate backend to handle uri (torchaudio)">
+  **Problem**: Newer versions of torchaudio don't handle the default audio backend properly.
+
+  **Solution**: You have two options:
+
+  **Option 1**: Downgrade torchaudio
+  ```bash
+  pip install torchaudio==2.1.0
+  ```
+
+  **Option 2**: Install soundfile as your audio backend
+  ```bash
+  pip install soundfile
+  ```
+
+  <Warning>
+    If you're using torchaudio version 2.2.0 or later, we recommend installing soundfile as the audio backend for better compatibility.
+  </Warning>
+</Accordion>
+
+## Installation Issues
+
+<Accordion title="Installation fails with dependency conflicts">
+  **Problem**: Pip reports conflicts between package versions during installation.
+
+  **Solution**: Ensure you have the minimum required versions:
+
+  - Python >= 3.8 (>= 3.10 for streaming support)
+  - PyTorch >= 1.13.0
+
+  Try installing in a fresh virtual environment:
+
+  ```bash
+  python -m venv audioseal_env
+  source audioseal_env/bin/activate  # On Windows: audioseal_env\Scripts\activate
+  pip install audioseal
+  ```
+</Accordion>
+
+<Accordion title="CUDA/GPU not detected">
+  **Problem**: AudioSeal doesn't utilize your GPU for inference.
+
+  **Solution**: Ensure you have the correct PyTorch version with CUDA support:
+
+  ```bash
+  # Check PyTorch CUDA availability
+  python -c "import torch; print(torch.cuda.is_available())"
+  
+  # If False, install PyTorch with CUDA support
+  # Visit https://pytorch.org/get-started/locally/ for your specific CUDA version
+  ```
+
+  Move your model and audio tensors to GPU:
+
+  ```python
+  device = "cuda" if torch.cuda.is_available() else "cpu"
+  model = AudioSeal.load_generator("audioseal_wm_16bits").to(device)
+  wav = wav.to(device)
+  ```
+</Accordion>
+
+## Model Loading Issues
+
+<Accordion title="Model fails to download from Hugging Face">
+  **Problem**: Connection errors or timeouts when downloading model checkpoints.
+
+  **Solution**: Try the following approaches:
+
+  1. Check your internet connection
+  2. Set a longer timeout:
+     ```python
+     import os
+     os.environ['HF_HUB_DOWNLOAD_TIMEOUT'] = '300'
+     ```
+  3. Manually download from [Hugging Face Hub](https://huggingface.co/facebook/audioseal) and load locally:
+     ```python
+     model = Watermarker.from_pretrained("/path/to/checkpoint", device=device)
+     ```
+</Accordion>
+
+<Accordion title="Out of memory errors during inference">
+  **Problem**: CUDA out of memory errors when processing large audio files.
+
+  **Solution**: Process audio in smaller chunks:
+
+  ```python
+  # Split long audio into smaller chunks
+  chunk_size = 16000 * 30  # 30 seconds at 16kHz
+  chunks = torch.split(wav, chunk_size, dim=-1)
+  
+  watermarked_chunks = []
+  for chunk in chunks:
+      watermark = model.get_watermark(chunk)
+      watermarked_chunks.append(chunk + watermark)
+  
+  watermarked_audio = torch.cat(watermarked_chunks, dim=-1)
+  ```
+
+  <Note>
+    For streaming applications, consider using the streaming API available in AudioSeal 0.2+.
+  </Note>
+</Accordion>
+
+## Detection Issues
+
+<Accordion title="Detector reports low confidence on watermarked audio">
+  **Problem**: The detector outputs low probabilities even for known watermarked audio.
+
+  **Possible causes and solutions**:
+
+  1. **Sample rate mismatch**: Ensure the audio sample rate matches the model's expected rate (16kHz by default)
+     ```python
+     import julius
+     if sample_rate != 16000:
+         wav = julius.resample_frac(wav, sample_rate, 16000)
+     ```
+
+  2. **Audio has been heavily modified**: The watermark may have been degraded by compression, noise, or other attacks
+
+  3. **Using wrong detector**: Ensure you're using the matching detector for your generator model
+     ```python
+     # Use matching pair
+     generator = AudioSeal.load_generator("audioseal_wm_16bits")
+     detector = AudioSeal.load_detector("audioseal_detector_16bits")
+     ```
+</Accordion>
+
+## Performance Issues
+
+<Accordion title="Slow inference speed">
+  **Problem**: Watermarking or detection is slower than expected.
+
+  **Solutions**:
+
+  1. **Use GPU**: Move models to GPU for faster inference
+  2. **Disable gradient computation**:
+     ```python
+     model.eval()
+     with torch.no_grad():
+         watermark = model.get_watermark(wav)
+     ```
+  3. **Batch processing**: Process multiple files in batches when possible
+  4. **Use streaming mode**: For real-time applications, use the streaming API (AudioSeal 0.2+)
+</Accordion>
+
+## Streaming Support Issues
+
+<Accordion title="Streaming mode hangs in Jupyter notebooks">
+  **Problem**: Running the streaming API in certain PyTorch versions causes hanging in Jupyter notebooks.
+
+  **Solution**: Disable torch dynamo before starting Jupyter:
+
+  ```bash
+  export NO_TORCH_COMPILE=1
+  jupyter notebook
+  ```
+
+  Or set it in Python:
+  ```python
+  import os
+  os.environ['NO_TORCH_COMPILE'] = '1'
+  ```
+
+  <Warning>
+    This issue affects specific PyTorch versions. Ensure you're using a compatible version or disable torch compile as shown above.
+  </Warning>
+</Accordion>
+
+## Getting Help
+
+If you encounter issues not covered here:
+
+1. Check the [GitHub Issues](https://github.com/facebookresearch/audioseal/issues) page for similar problems
+2. Review the [example notebooks](https://github.com/facebookresearch/audioseal/tree/master/examples) for working code
+3. Open a new issue with:
+   - Your AudioSeal version
+   - Python and PyTorch versions
+   - Complete error message and stack trace
+   - Minimal code to reproduce the issue
+
+<Note>
+  When reporting issues, always include your environment details and a reproducible example to help maintainers diagnose the problem quickly.
+</Note>

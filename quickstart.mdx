@@ -1,80 +1,324 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with AudioSeal in minutes - watermark and detect audio with just a few lines of code
 ---
 
-## Get started in three steps
+# Quickstart Guide
 
-Get your documentation site running locally and make your first customization.
+This guide will help you get started with AudioSeal quickly. You'll learn how to watermark audio and detect watermarks using the core API.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+Make sure you have AudioSeal installed. If not, see the [installation guide](/installation).
+
+```bash
+pip install audioseal
+```
+
+## Basic Workflow
+
+<Steps>
+  <Step title="Import AudioSeal">
+    Import the necessary modules and initialize PyTorch:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    ```python
+    import torch
+    from audioseal import AudioSeal
+    ```
+  </Step>
+  
+  <Step title="Load your audio">
+    Load your audio file as a PyTorch tensor with shape `(batch, channels, samples)`:
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    ```python
+    # Example: Load audio using torchaudio or your preferred method
+    import torchaudio
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    wav, sample_rate = torchaudio.load("input.wav")
+    
+    # Add batch dimension if needed
+    if wav.dim() == 2:
+        wav = wav.unsqueeze(0)  # Now shape is (1, channels, samples)
+    ```
+    
+    <Note>
+    AudioSeal expects audio with a batch dimension. Always ensure your input has shape `(batch, channels, samples)`.
+    </Note>
+  </Step>
+  
+  <Step title="Watermark the audio">
+    Load the generator and create a watermarked version:
+    
+    ```python
+    # Load the generator model
+    generator = AudioSeal.load_generator("audioseal_wm_16bits")
+    generator.eval()
+    
+    # Generate watermark
+    watermark = generator.get_watermark(wav)
+    
+    # Add watermark to original audio
+    watermarked_audio = wav + watermark
+    ```
+  </Step>
+  
+  <Step title="Detect the watermark">
+    Load the detector and check for watermarks:
+    
+    ```python
+    # Load the detector model
+    detector = AudioSeal.load_detector("audioseal_detector_16bits")
+    detector.eval()
+    
+    # Detect watermark (high-level API)
+    result, message = detector.detect_watermark(watermarked_audio)
+    
+    print(f"Detection probability: {result}")
+    print(f"Decoded message: {message}")
+    ```
+  </Step>
+</Steps>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+## Complete Example
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+Here's a complete example that puts it all together:
 
-### Step 3: Go live
+```python
+import torch
+from audioseal import AudioSeal
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+# Load the generator model
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+generator.eval()
 
-## Next steps
+# Load your audio (example with random audio)
+# In practice, load your actual audio file
+wav = torch.randn(1, 1, 16000 * 5)  # 5 seconds of audio at 16kHz
 
-Now that you have your docs running, explore these key features:
+# Generate and apply watermark
+watermark = generator.get_watermark(wav)
+watermarked_audio = wav + watermark
 
-<CardGroup cols={2}>
+# Load the detector model
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+detector.eval()
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+# Detect watermark
+result, message = detector.detect_watermark(watermarked_audio)
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+print(f"Detection probability: {result.item():.4f}")
+print(f"Message bits: {message}")
+```
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+**Expected Output:**
+```
+Detection probability: 0.9876
+Message bits: tensor([[0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0]])
+```
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+The detection probability should be close to 1.0 for watermarked audio and close to 0.0 for non-watermarked audio.
+</Note>
+
+## Using Secret Messages
+
+You can embed a custom 16-bit message in the watermark to identify the source or version:
+
+```python
+import torch
+from audioseal import AudioSeal
+
+# Create a custom 16-bit message
+# Each bit is either 0 or 1
+message = torch.tensor([[0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0]])
+
+# Load generator
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+generator.eval()
+
+# Generate watermark with custom message
+wav = torch.randn(1, 1, 16000 * 5)
+watermark = generator.get_watermark(wav, message=message)
+watermarked_audio = wav + watermark
+
+# Detect and decode message
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+detector.eval()
+
+detection_prob, decoded_message = detector.detect_watermark(watermarked_audio)
+
+print(f"Original message:  {message}")
+print(f"Decoded message:   {decoded_message}")
+print(f"Messages match: {torch.equal(message, decoded_message)}")
+```
+
+**Expected Output:**
+```
+Original message:  tensor([[0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0]])
+Decoded message:   tensor([[0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0]])
+Messages match: True
+```
+
+<Warning>
+The secret message is optional and does not affect detection. It's recovered only from watermarked audio; non-watermarked audio will return a random message.
+</Warning>
+
+## Low-Level Detection API
+
+For frame-level detection (advanced use), you can use the low-level API:
+
+```python
+import torch
+from audioseal import AudioSeal
+
+# Load models
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+generator.eval()
+detector.eval()
+
+# Create watermarked audio
+wav = torch.randn(1, 1, 16000 * 5)
+watermarked_audio = generator(wav, alpha=1.0)
+
+# Low-level detection
+result, message = detector(watermarked_audio)
+
+# result shape: (batch, 2, frames)
+# result[:, 0, :] = probability of NO watermark
+# result[:, 1, :] = probability of watermark
+
+print(f"Result shape: {result.shape}")
+print(f"Watermark probability per frame: {result[:, 1, :]}")
+print(f"Message probability: {message}")
+```
+
+**Expected Output:**
+```
+Result shape: torch.Size([1, 2, 625])
+Watermark probability per frame: tensor([[[0.98, 0.97, 0.99, ...]]])
+Message probability: tensor([[0.45, 0.87, 0.23, ...]])  # probability of each bit being 1
+```
+
+## Adjusting Watermark Strength
+
+You can control the watermark strength using the `alpha` parameter:
+
+```python
+# Stronger watermark (more robust, potentially more audible)
+watermarked_strong = generator(wav, alpha=1.5)
+
+# Weaker watermark (less audible, less robust)
+watermarked_weak = generator(wav, alpha=0.5)
+
+# Default strength
+watermarked_default = generator(wav, alpha=1.0)
+```
+
+<Note>
+`alpha=1.0` provides a good balance between imperceptibility and robustness. Adjust based on your specific requirements.
+</Note>
+
+## Working with Different Sample Rates
+
+AudioSeal works with multiple sample rates. The model handles 16 kHz, 24 kHz, 44.1 kHz, and 48 kHz:
+
+```python
+import torch
+from audioseal import AudioSeal
+
+# Load models
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+
+# Example with 48kHz audio
+wav_48k = torch.randn(1, 1, 48000 * 5)  # 5 seconds at 48kHz
+watermarked = generator(wav_48k)
+result, message = detector.detect_watermark(watermarked)
+
+print(f"Detection at 48kHz: {result.item():.4f}")
+```
+
+<Warning>
+Starting from AudioSeal 0.2+, audio is **not** resampled internally. Ensure your audio is at an appropriate sample rate (16/24/44.1/48 kHz) before processing.
+</Warning>
+
+## Using GPU Acceleration
+
+For faster processing, use GPU if available:
+
+```python
+import torch
+from audioseal import AudioSeal
+
+# Check for GPU
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Using device: {device}")
+
+# Load models on GPU
+generator = AudioSeal.load_generator("audioseal_wm_16bits", device=device)
+detector = AudioSeal.load_detector("audioseal_detector_16bits", device=device)
+
+# Move audio to GPU
+wav = torch.randn(1, 1, 16000 * 5).to(device)
+
+# Process on GPU
+watermarked = generator(wav)
+result, message = detector.detect_watermark(watermarked)
+
+print(f"Detection result: {result.item():.4f}")
+```
+
+## Saving Watermarked Audio
+
+Save your watermarked audio to a file:
+
+```python
+import torch
+import torchaudio
+from audioseal import AudioSeal
+
+# Load and watermark audio
+wav, sr = torchaudio.load("input.wav")
+wav = wav.unsqueeze(0)  # Add batch dimension
+
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+watermarked = generator(wav)
+
+# Remove batch dimension for saving
+watermarked = watermarked.squeeze(0)
+
+# Save to file
+torchaudio.save("output_watermarked.wav", watermarked.cpu(), sr)
+
+print("Watermarked audio saved to output_watermarked.wav")
+```
+
+## Common Pitfalls
+
+<Warning>
+**Missing Batch Dimension**: Always ensure your audio has shape `(batch, channels, samples)`. Use `wav.unsqueeze(0)` if needed.
+
+```python
+# Wrong - missing batch dimension
+wav = torch.randn(1, 16000)  # Shape: (channels, samples)
+
+# Correct
+wav = torch.randn(1, 1, 16000)  # Shape: (batch, channels, samples)
+# OR
+wav = torch.randn(1, 16000).unsqueeze(0)  # Add batch dimension
+```
+</Warning>
+
+## Next Steps
+
+Now that you've learned the basics, explore more advanced features:
+
+- **[Streaming Mode](/guides/streaming-support)** - Process audio in real-time with streaming support
+- **[API Reference](/api/audioseal)** - Complete API documentation
+- **[Training](/guides/training-custom-models)** - Train custom watermarking models
+- **[Examples](/resources/examples)** - More code examples and use cases
+
+<Note>
+For interactive examples, check out the [Colab Notebook](https://colab.research.google.com/github/facebookresearch/audioseal/blob/master/examples/colab.ipynb) with visualizations and audio playback.
 </Note>

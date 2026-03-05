@@ -1,0 +1,419 @@
+---
+title: 'Watermark Detection'
+description: 'How AudioSeal detects watermarks and decodes messages'
+icon: 'magnifying-glass'
+---
+
+## Overview
+
+The AudioSeal detector (`AudioSealDetector` class) identifies watermarked audio segments and decodes embedded messages with **sample-level precision**. Unlike traditional watermark detectors that output a single binary decision, AudioSeal provides **frame-by-frame probabilities**, enabling localized detection in edited or concatenated audio.
+
+## Detector Architecture
+
+The detector is simpler than the generator, consisting of two main components:
+
+### 1. SEANet Encoder (Keep Dimension)
+
+```python
+# From audioseal/models.py:355
+class AudioSealDetector(torch.nn.Module):
+    def __init__(
+        self,
+        encoder: SEANetEncoderKeepDimension,
+        normalizer: Optional[NormalizationProcessor] = None,
+        nbits: int = 0,
+    ):
+        super().__init__()
+        last_layer = torch.nn.Conv1d(encoder.output_dim, 2 + nbits, 1)
+        self.detector = torch.nn.Sequential(encoder, last_layer)
+        self.nbits = nbits
+```
+
+**Key Difference from Generator**: Uses `SEANetEncoderKeepDimension` instead of regular `SEANetEncoder`
+
+<AccordionGroup>
+  <Accordion title="Why Keep Dimension?">
+    The standard encoder downsamples audio by a factor of 320 (with default ratios), collapsing temporal information. The detector needs to maintain temporal resolution to provide **frame-by-frame detection probabilities**.
+    
+    `SEANetEncoderKeepDimension` processes audio while preserving the temporal dimension, enabling localized watermark detection.
+  </Accordion>
+  
+  <Accordion title="Architecture Details">
+    - Same convolutional structure as the generator encoder
+    - No temporal downsampling (or compensated with appropriate padding/upsampling)
+    - Outputs: `(batch, output_dim=32, frames)` where frames ≈ input_samples
+    - Much larger output than compressed encoder
+  </Accordion>
+</AccordionGroup>
+
+### 2. Detection Head (1x1 Convolution)
+
+A simple 1x1 convolution projects the encoder output to detection logits:
+
+```python
+last_layer = torch.nn.Conv1d(encoder.output_dim, 2 + nbits, 1)
+```
+
+**Output Channels:**
+- **Channel 0-1**: Detection logits (watermark present/absent)
+- **Channel 2-(1+nbits)**: Message decoding logits (16 channels for 16-bit message)
+
+<Info>
+  The 1x1 convolution acts as a learned linear projection applied independently to each time frame, enabling efficient frame-by-frame prediction.
+</Info>
+
+## Detection Process
+
+The forward pass consists of several steps:
+
+### Step 1: Optional Loudness Normalization
+
+```python
+# From audioseal/models.py:444
+if self.normalizer is not None and not torch.jit.is_scripting():
+    x = self.normalizer.loudness_normalization(x)
+```
+
+Loudness normalization helps maintain consistent detection performance across audio with varying volume levels:
+
+<Steps>
+  <Step title="Window Audio">
+    Divide audio into overlapping windows
+  </Step>
+  <Step title="Compute RMS">
+    Calculate energy for each window
+  </Step>
+  <Step title="Calculate Gain">
+    Scale to target RMS (default: 0.1)
+  </Step>
+  <Step title="Apply with Hann Window">
+    Smooth scaling to avoid artifacts
+  </Step>
+</Steps>
+
+### Step 2: Encoder Processing
+
+```python
+result = self.detector(x)  # Shape: (batch, 2+nbits, frames)
+```
+
+The encoder processes the audio while maintaining temporal dimension, producing a multi-channel output with detection and message information.
+
+### Step 3: Detection Probability Calculation
+
+```python
+# From audioseal/models.py:452
+# Softmax on first 2 channels for detection
+result[:, :2, :] = torch.softmax(result[:, :2, :], dim=1)
+```
+
+The first two channels contain raw logits that are converted to probabilities:
+- **Channel 0**: P(no watermark)
+- **Channel 1**: P(watermark present)
+
+<Note>
+  After softmax, `result[:, 0, :] + result[:, 1, :] = 1.0` for each frame, ensuring valid probability distribution.
+</Note>
+
+### Step 4: Message Decoding
+
+```python
+# From audioseal/models.py:421
+@torch.jit.export
+def decode_message(self, result: torch.Tensor) -> torch.Tensor:
+    """
+    Decode the message from the watermark result (batch x nbits x frames)
+    Returns: The message of size batch x nbits (probability of 1 for each bit)
+    """
+    decoded_message = result.mean(dim=-1)  # Average across all frames
+    return torch.sigmoid(decoded_message)  # Convert to [0, 1] probabilities
+```
+
+<AccordionGroup>
+  <Accordion title="Why Average Across Frames?">
+    The same message is embedded throughout the entire watermarked audio. By averaging predictions across all frames, we:
+    - Reduce noise and improve accuracy
+    - Aggregate evidence from the entire audio
+    - Obtain a single consensus message prediction
+  </Accordion>
+  
+  <Accordion title="Why Sigmoid?">
+    After averaging, the raw logits are passed through sigmoid to convert to probabilities in [0, 1], where:
+    - Values close to 0 indicate bit = 0
+    - Values close to 1 indicate bit = 1
+    - Values near 0.5 indicate uncertainty
+  </Accordion>
+</AccordionGroup>
+
+## High-Level Detection API
+
+The `detect_watermark` method provides a convenient interface:
+
+```python
+# From audioseal/models.py:390
+@torch.jit.export
+def detect_watermark(
+    self,
+    x: torch.Tensor,
+    sample_rate: Optional[int] = None,
+    message_threshold: float = 0.5,
+    detection_threshold: float = 0.5,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Returns:
+        detect_prob: Probability of audio being watermarked (scalar per batch)
+        message: Binary message tensor (batch x nbits)
+    """
+    result, message = self.forward(x, sample_rate=sample_rate)
+    
+    # Count frames above threshold
+    detect_prob = (
+        torch.count_nonzero(
+            torch.gt(result[:, 1, :], detection_threshold), dim=-1
+        ) / result.shape[-1]
+    )
+    
+    # Convert message probabilities to binary
+    message = torch.gt(message, message_threshold).int()
+    
+    return detect_prob, message
+```
+
+<Steps>
+  <Step title="Get Frame Probabilities">
+    Run the forward pass to get per-frame detection probabilities
+  </Step>
+  <Step title="Apply Detection Threshold">
+    Count frames where P(watermark) > threshold (default 0.5)
+  </Step>
+  <Step title="Calculate Overall Probability">
+    Proportion of frames above threshold = overall detection score
+  </Step>
+  <Step title="Binarize Message">
+    Convert message probabilities to binary using threshold
+  </Step>
+</Steps>
+
+## Threshold Parameters
+
+Two key thresholds control detection behavior:
+
+### Detection Threshold
+
+```python
+detection_threshold: float = 0.5  # Default
+```
+
+<CardGroup cols={2}>
+  <Card title="Lower Threshold (e.g., 0.3)" icon="arrow-down">
+    - More sensitive detection
+    - Higher recall (fewer false negatives)
+    - More false positives
+  </Card>
+  <Card title="Higher Threshold (e.g., 0.7)" icon="arrow-up">
+    - More conservative detection
+    - Higher precision (fewer false positives)
+    - More false negatives
+  </Card>
+</CardGroup>
+
+### Message Threshold
+
+```python
+message_threshold: float = 0.5  # Default
+```
+
+Determines when a message bit is considered 1 vs 0. Usually kept at 0.5 for balanced classification.
+
+<Tip>
+  For production systems, tune `detection_threshold` based on your false positive/false negative tolerance. Use validation data to find the optimal threshold for your use case.
+</Tip>
+
+## Usage Examples
+
+### Basic Detection
+
+```python
+from audioseal import AudioSeal
+
+# Load detector
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+detector.eval()
+
+# Detect watermark (high-level API)
+detect_prob, message = detector.detect_watermark(audio)
+
+print(f"Detection probability: {detect_prob.item():.2%}")
+if detect_prob > 0.5:
+    print(f"Watermarked! Message: {message}")
+else:
+    print("No watermark detected")
+```
+
+### Low-Level Detection (Frame-by-Frame)
+
+```python
+# Get per-frame probabilities
+result, message = detector(audio)
+
+# result shape: (batch, 2, frames)
+# Extract watermark probability for each frame
+wm_prob_per_frame = result[:, 1, :]  # Shape: (batch, frames)
+
+# Find watermarked regions
+import torch
+watermarked_frames = torch.where(wm_prob_per_frame > 0.5)[1]
+
+print(f"Watermark detected in {len(watermarked_frames)} frames")
+print(f"Total frames: {wm_prob_per_frame.shape[1]}")
+```
+
+### Custom Thresholds
+
+```python
+# More sensitive detection
+detect_prob, message = detector.detect_watermark(
+    audio,
+    detection_threshold=0.3,  # Lower threshold
+    message_threshold=0.5
+)
+
+# More conservative detection
+detect_prob, message = detector.detect_watermark(
+    audio,
+    detection_threshold=0.7,  # Higher threshold
+    message_threshold=0.5
+)
+```
+
+### Localized Detection in Edited Audio
+
+```python
+# Detect watermarks in potentially edited audio
+result, message = detector(edited_audio)
+wm_prob = result[:, 1, :]  # Per-frame probabilities
+
+# Find contiguous watermarked segments
+from scipy.ndimage import label
+watermarked_binary = (wm_prob[0] > 0.5).cpu().numpy()
+segments, num_segments = label(watermarked_binary)
+
+print(f"Found {num_segments} watermarked segments")
+
+# Assuming 16kHz sample rate, 1 frame ≈ 1 sample
+for i in range(1, num_segments + 1):
+    segment_frames = np.where(segments == i)[0]
+    start_time = segment_frames[0] / 16000
+    end_time = segment_frames[-1] / 16000
+    print(f"Segment {i}: {start_time:.2f}s - {end_time:.2f}s")
+```
+
+<Check>
+  This localized detection enables identifying **which parts** of an audio file are watermarked, even if the audio has been edited or concatenated with unwatermarked content.
+</Check>
+
+## Performance Characteristics
+
+<CardGroup cols={2}>
+  <Card title="Speed" icon="gauge-high">
+    **Single forward pass** through a convolutional network. Up to 100x faster than iterative decoding methods.
+  </Card>
+  <Card title="Accuracy" icon="bullseye">
+    State-of-the-art detection performance even after compression, noise, and editing.
+  </Card>
+  <Card title="Localization" icon="location-crosshairs">
+    **Frame-level precision** enables detection in edited audio at 1/16,000 second resolution.
+  </Card>
+  <Card title="Scalability" icon="chart-line">
+    Efficient batch processing for large-scale detection tasks.
+  </Card>
+</CardGroup>
+
+## Robustness to Audio Transformations
+
+The detector is trained to be robust against common audio manipulations:
+
+<AccordionGroup>
+  <Accordion title="Compression">
+    - MP3 encoding (various bitrates)
+    - AAC encoding
+    - Opus codec
+    
+    Detection remains reliable even at moderate compression levels.
+  </Accordion>
+  
+  <Accordion title="Noise and Interference">
+    - Additive Gaussian noise
+    - Environmental noise
+    - Background music
+    
+    Loudness normalization helps maintain detection under varying noise conditions.
+  </Accordion>
+  
+  <Accordion title="Editing Operations">
+    - Cutting and splicing
+    - Concatenation
+    - Speed changes
+    - Volume adjustments
+    
+    Localized detection enables identifying watermarked segments even in heavily edited audio.
+  </Accordion>
+  
+  <Accordion title="Resampling">
+    - Different sample rates (24kHz, 44.1kHz, 48kHz)
+    - Sample rate conversion
+    
+    Model generalizes well to different sample rates despite being trained on 16kHz.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  While AudioSeal is robust to many transformations, extremely aggressive modifications (e.g., very low bitrate compression, severe distortion) may degrade detection performance.
+</Warning>
+
+## Technical Specifications
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `encoder.output_dim` | 32 | Encoder output channels |
+| `nbits` | 16 | Message length (0 for detection-only) |
+| `detection_threshold` | 0.5 | Default frame-level threshold |
+| `message_threshold` | 0.5 | Default message bit threshold |
+| `frames_per_second` | ~16,000 | Temporal resolution at 16kHz |
+
+## Design Choices
+
+### Why Frame-by-Frame Detection?
+
+Traditional watermark detectors output a single binary decision for an entire audio file. AudioSeal's frame-by-frame approach enables:
+
+1. **Localized Detection**: Identify which parts are watermarked
+2. **Edit Detection**: Find where audio was cut or modified
+3. **Robustness**: Aggregate evidence across multiple frames
+4. **Flexibility**: Apply different thresholds for different use cases
+
+### Why Separate Detection and Message Channels?
+
+The detector outputs both detection logits (2 channels) and message logits (16 channels) simultaneously:
+
+- **Detection** is always active and works even without a message
+- **Message** is optional metadata that doesn't affect detection
+- Allows using the same model for both 0-bit (detection-only) and 16-bit (detection + message) watermarking
+
+<Info>
+  You can train a detector with `nbits=0` for detection-only applications, reducing model size and complexity.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Localized Watermarking" icon="location-crosshairs" href="/concepts/localized-watermarking">
+    Understand sample-level precision
+  </Card>
+  <Card title="Generation" icon="wand-magic-sparkles" href="/concepts/watermark-generation">
+    Learn about watermark generation
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference/detector">
+    Full detector API documentation
+  </Card>
+</CardGroup>

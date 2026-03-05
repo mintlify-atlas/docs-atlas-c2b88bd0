@@ -1,0 +1,275 @@
+---
+title: 'AudioSealWM'
+description: 'Watermark generator for embedding imperceptible audio watermarks'
+icon: 'waveform'
+---
+
+## Overview
+
+The `AudioSealWM` class generates watermarks that can be embedded into audio signals. It supports both 0-bit watermarking (presence detection only) and n-bit watermarking (with secret messages).
+
+## Initialization
+
+```python
+from audioseal import AudioSeal
+
+# Load a pre-trained generator
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+```
+
+<Info>
+  Typically, you'll load a generator using `AudioSeal.load_generator()` rather than instantiating directly.
+</Info>
+
+## Methods
+
+### get_watermark
+
+Generate a watermark signal for the given audio without applying it.
+
+```python
+import torch
+import torchaudio
+
+# Load audio
+audio, sr = torchaudio.load("audio.wav")
+
+# Generate watermark
+watermark = generator.get_watermark(audio)
+
+# Manually apply with custom strength
+watermarked = audio + 0.5 * watermark
+```
+
+#### Parameters
+
+<ParamField path="x" type="torch.Tensor" required>
+  Input audio tensor of shape `(batch, channels, samples)` or `(batch, samples)`. The audio should be at the model's expected sample rate (typically 16kHz).
+</ParamField>
+
+<ParamField path="sample_rate" type="int" default="None">
+  Sample rate of the input audio. This parameter is deprecated and will be ignored in AudioSeal 0.2+. Ensure your audio is at the correct sample rate before calling this method.
+</ParamField>
+
+<ParamField path="message" type="torch.Tensor" default="None">
+  Binary message tensor of shape `(batch, nbits)` or `(nbits,)`. If None, a random message will be generated. Values should be 0 or 1.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="watermark" type="torch.Tensor">
+  The generated watermark signal with the same shape as the input audio.
+</ResponseField>
+
+#### Example
+
+```python
+import torch
+import torchaudio
+
+# Load audio
+audio, sr = torchaudio.load("audio.wav")
+
+# Get watermark without message (random message)
+watermark = generator.get_watermark(audio)
+
+# Get watermark with specific message
+message = torch.tensor([1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0])
+watermark = generator.get_watermark(audio, message=message)
+
+# Apply with custom strength
+alpha = 0.8
+watermarked = audio + alpha * watermark
+```
+
+---
+
+### forward
+
+Generate and apply a watermark to the audio signal in one step.
+
+```python
+# Apply watermark to audio
+watermarked_audio = generator(audio, message=message, alpha=1.0)
+```
+
+#### Parameters
+
+<ParamField path="x" type="torch.Tensor" required>
+  Input audio tensor of shape `(batch, channels, samples)` or `(batch, samples)`.
+</ParamField>
+
+<ParamField path="sample_rate" type="int" default="None">
+  Sample rate of the input audio. This parameter is deprecated and will be ignored.
+</ParamField>
+
+<ParamField path="message" type="torch.Tensor" default="None">
+  Binary message tensor of shape `(batch, nbits)` or `(nbits,)`. If None, uses a random message.
+</ParamField>
+
+<ParamField path="alpha" type="float" default="1.0">
+  Watermark strength multiplier. Values between 0.0 and 1.0. Lower values make the watermark more subtle but potentially less robust.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="watermarked_audio" type="torch.Tensor">
+  The watermarked audio with the same shape as the input.
+</ResponseField>
+
+#### Example
+
+```python
+import torch
+import torchaudio
+from audioseal import AudioSeal
+
+# Load model and audio
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+audio, sr = torchaudio.load("audio.wav")
+
+# Apply watermark with default strength
+watermarked = generator(audio)
+
+# Apply with custom message and strength
+message = torch.randint(0, 2, (16,))  # 16-bit message
+watermarked = generator(audio, message=message, alpha=0.8)
+
+# Save result
+torchaudio.save("watermarked.wav", watermarked, sr)
+```
+
+---
+
+### streaming
+
+Context manager for streaming mode processing.
+
+```python
+with generator.streaming(batch_size=1):
+    for chunk in audio_chunks:
+        watermarked_chunk = generator(chunk)
+```
+
+#### Parameters
+
+<ParamField path="batch_size" type="int" required>
+  Number of parallel streams to process simultaneously.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="context" type="ContextManager">
+  A context manager that enables streaming mode for the encoder.
+</ResponseField>
+
+#### Example
+
+```python
+import torch
+from audioseal import AudioSeal
+
+# Load generator
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+
+# Process audio in streaming mode
+chunk_size = 16000  # 1 second at 16kHz
+audio_chunks = audio.split(chunk_size, dim=-1)
+
+watermarked_chunks = []
+with generator.streaming(batch_size=1):
+    for chunk in audio_chunks:
+        watermarked = generator(chunk)
+        watermarked_chunks.append(watermarked)
+
+# Concatenate results
+watermarked_audio = torch.cat(watermarked_chunks, dim=-1)
+```
+
+<Warning>
+  Streaming mode is only available in AudioSeal 0.2+ with Python 3.10+. A `NotImplementedError` will be raised if the feature is not available.
+</Warning>
+
+---
+
+### random_message
+
+Generate a random binary message for watermarking.
+
+```python
+# Generate random message for batch
+message = generator.random_message(bsz=4)
+```
+
+#### Parameters
+
+<ParamField path="bsz" type="int" required>
+  Batch size for the generated messages.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="message" type="torch.Tensor">
+  Random binary tensor of shape `(bsz, nbits)` with values 0 or 1.
+</ResponseField>
+
+## Attributes
+
+<ResponseField name="encoder" type="torch.nn.Module">
+  The SEANet encoder that processes input audio into hidden representations.
+</ResponseField>
+
+<ResponseField name="decoder" type="torch.nn.Module">
+  The SEANet decoder that generates the watermark signal from hidden representations.
+</ResponseField>
+
+<ResponseField name="msg_processor" type="MsgProcessor">
+  The message processor that embeds the secret message into the hidden representation. None for 0-bit watermarking.
+</ResponseField>
+
+<ResponseField name="normalizer" type="NormalizationProcessor">
+  Optional normalizer that fits the watermark within the audio envelope for improved imperceptibility.
+</ResponseField>
+
+## Complete Example
+
+```python
+import torch
+import torchaudio
+from audioseal import AudioSeal
+
+# Load the generator
+generator = AudioSeal.load_generator(
+    "audioseal_wm_16bits",
+    device="cuda"
+)
+
+# Load audio
+audio, sr = torchaudio.load("input.wav")
+
+# Create a custom 16-bit message
+message = torch.tensor([
+    1, 0, 1, 1, 0, 0, 1, 0,
+    1, 1, 0, 1, 0, 1, 1, 0
+])
+
+# Generate watermarked audio
+watermarked = generator(
+    audio,
+    message=message,
+    alpha=0.8  # 80% watermark strength
+)
+
+# Save the result
+torchaudio.save("watermarked.wav", watermarked.cpu(), sr)
+
+print(f"Watermarked audio shape: {watermarked.shape}")
+print(f"Message embedded: {message}")
+```
+
+## See Also
+
+- [AudioSeal](/api/audioseal) - Model loader
+- [AudioSealDetector](/api/detector) - Watermark detector
+- [MsgProcessor](/api/msg-processor) - Message embedding component
+- [Streaming Guide](/guides/streaming-support) - Streaming audio processing

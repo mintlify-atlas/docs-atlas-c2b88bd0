@@ -1,0 +1,226 @@
+---
+title: 'Basic Usage'
+description: 'Learn how to watermark and detect audio with AudioSeal'
+icon: 'play'
+---
+
+This guide covers the essential operations for using AudioSeal to watermark audio and detect watermarks.
+
+## Loading Models
+
+AudioSeal provides two main models: a generator for embedding watermarks and a detector for identifying them.
+
+### Load the Generator
+
+```python
+from audioseal import AudioSeal
+
+# Load generator from model card
+model = AudioSeal.load_generator("audioseal_wm_16bits")
+model.eval()
+
+# Alternative: Load from checkpoint path
+# model = AudioSeal.load_generator("/path/to/generator.pth", nbits=16)
+```
+
+### Load the Detector
+
+```python
+# Load detector from model card
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+detector.eval()
+
+# Alternative: Load from checkpoint path  
+# detector = AudioSeal.load_detector("/path/to/detector.pth", nbits=16)
+```
+
+<Note>
+The model name corresponds to YAML card files in `audioseal/cards`. The `nbits` parameter specifies the number of bits for secret messages (typically 16).
+</Note>
+
+## Watermarking Audio
+
+AudioSeal provides two methods for adding watermarks to audio:
+
+### Method 1: Using `get_watermark`
+
+Generate the watermark separately, then add it to your audio:
+
+```python
+import torch
+
+# Load your audio as a tensor of shape (batch, channels, samples)
+# wav: torch.Tensor with shape [batch, channels, time]
+
+# Generate the watermark
+watermark = model.get_watermark(wav)
+
+# Add watermark to audio
+watermarked_audio = wav + watermark
+```
+
+### Method 2: Using `forward`
+
+Directly watermark the audio in one step:
+
+```python
+# Apply watermarking with default strength (alpha=1.0)
+watermarked_audio = model(wav, alpha=1.0)
+
+# Or use a different alpha value
+watermarked_audio = model(wav, alpha=0.8)
+```
+
+<Note>
+The `alpha` parameter controls watermark strength. Values between 0.5 and 1.5 are recommended. Higher values make the watermark more robust but potentially more audible.
+</Note>
+
+## Detecting Watermarks
+
+AudioSeal provides two detection methods with different levels of detail:
+
+### High-Level Detection
+
+Get a simple probability score and decoded message:
+
+```python
+# Returns overall detection probability and binary message
+result, message = detector.detect_watermark(watermarked_audio)
+
+print(f"Detection probability: {result}")  # Float between 0 and 1
+print(f"Message: {message}")  # Binary tensor of shape [batch, 16]
+```
+
+### Low-Level Detection
+
+Get frame-by-frame detection probabilities:
+
+```python
+# Returns detailed per-frame results
+result, message = detector(watermarked_audio)
+
+# result shape: [batch, 2, frames]
+# result[:, 0, :] = probability of NO watermark
+# result[:, 1, :] = probability of watermark present
+
+print(result[:, 1, :])  # Watermark probability for each frame
+print(message)  # Decoded message (batch x 16 bits)
+```
+
+<Note>
+A watermarked audio should have `result[:, 1, :] > 0.5` for most frames.
+</Note>
+
+## Working with Different Sample Rates
+
+<Warning>
+Starting from AudioSeal 0.2+, audio is **not** resampled internally. You must provide audio at the correct sample rate.
+</Warning>
+
+AudioSeal models are trained primarily for 16 kHz audio but work well with other rates:
+
+- **16 kHz**: Optimal performance (recommended)
+- **24 kHz**: Good performance for most audio
+- **44.1 kHz / 48 kHz**: Works well for speech audio
+
+```python
+import torchaudio
+
+# Load audio at original sample rate
+wav, sr = torchaudio.load("audio.wav")
+
+# Resample if needed
+if sr != 16000:
+    resampler = torchaudio.transforms.Resample(sr, 16000)
+    wav = resampler(wav)
+    sr = 16000
+
+# Add batch dimension if needed
+if wav.ndim == 2:
+    wav = wav.unsqueeze(0)  # [batch, channels, time]
+
+# Watermark at 16kHz
+watermarked = model(wav, alpha=1.0)
+```
+
+## Tuning Watermark Strength
+
+The `alpha` parameter lets you control the trade-off between robustness and audio quality:
+
+<Steps>
+  <Step title="Low Alpha (0.3 - 0.7)">
+    More imperceptible watermark, but less robust to attacks. Good for high-quality audio where minimal distortion is critical.
+  </Step>
+  
+  <Step title="Medium Alpha (0.8 - 1.2)">
+    Balanced trade-off. Recommended for most use cases. Default value is 1.0.
+  </Step>
+  
+  <Step title="High Alpha (1.3 - 1.5)">
+    Maximum robustness against attacks like compression and noise, but potentially more audible. Use when audio may undergo heavy processing.
+  </Step>
+</Steps>
+
+```python
+# Example: Adjust alpha based on use case
+
+# High quality music - use lower alpha
+music_watermarked = model(music_audio, alpha=0.6)
+
+# Podcast that may be compressed - use default
+podcast_watermarked = model(podcast_audio, alpha=1.0)
+
+# Audio for noisy environments - use higher alpha  
+robust_watermarked = model(audio, alpha=1.3)
+```
+
+## Complete Example
+
+Here's a full workflow from loading audio to detection:
+
+```python
+from audioseal import AudioSeal
+import torchaudio
+import torch
+
+# Load models
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+generator.eval()
+detector.eval()
+
+# Load audio
+wav, sr = torchaudio.load("example.wav")
+
+# Ensure correct format: [batch, channels, time]
+if wav.ndim == 2:
+    wav = wav.unsqueeze(0)
+
+# Resample if needed
+if sr != 16000:
+    wav = torchaudio.functional.resample(wav, sr, 16000)
+
+# Watermark the audio
+watermarked = generator(wav, alpha=1.0)
+
+# Detect watermark
+detect_prob, message = detector.detect_watermark(watermarked)
+
+print(f"Watermark detected with probability: {detect_prob.item():.3f}")
+print(f"Decoded message: {message}")
+
+# Save watermarked audio
+torchaudio.save("watermarked.wav", watermarked.squeeze(0), 16000)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Streaming Support" icon="signal-stream" href="/guides/streaming-support">
+    Learn how to watermark audio in real-time with streaming mode
+  </Card>
+  
+  <Card title="Secret Messages" icon="message" href="/guides/secret-messages">
+    Embed and decode custom 16-bit messages in your watermarks
+  </Card>
+</CardGroup>

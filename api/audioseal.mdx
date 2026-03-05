@@ -1,0 +1,164 @@
+---
+title: 'AudioSeal'
+description: 'Main entry point for loading AudioSeal models'
+icon: 'key'
+---
+
+## Overview
+
+The `AudioSeal` class provides static methods to load pre-trained generator and detector models. It serves as the primary interface for model initialization in AudioSeal.
+
+## Methods
+
+### load_generator
+
+Load a pre-trained AudioSeal watermark generator model.
+
+```python
+from audioseal import AudioSeal
+
+generator = AudioSeal.load_generator(
+    model_card_or_path="audioseal_wm_16bits",
+    device="cuda"
+)
+```
+
+#### Parameters
+
+<ParamField path="model_card_or_path" type="str" required>
+  Model card name or path to checkpoint. Can be:
+  - A local model card name (e.g., "audioseal_wm_16bits")
+  - A path to a local checkpoint file
+  - A Hugging Face model path (e.g., "facebook/audioseal/generator_base.pth")
+  - An HTTPS URL to a checkpoint
+</ParamField>
+
+<ParamField path="nbits" type="int" default="None">
+  Number of bits for the watermark message. If not specified, uses the value from the model config.
+</ParamField>
+
+<ParamField path="device" type="Device" default="None">
+  Device to load the model on (e.g., "cpu", "cuda", "cuda:0"). If None, defaults to CPU.
+</ParamField>
+
+<ParamField path="dtype" type="DataType" default="None">
+  Data type for model parameters (e.g., torch.float32, torch.float16). If None, uses default precision.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="generator" type="AudioSealWM">
+  The loaded generator model ready for watermark generation.
+</ResponseField>
+
+#### Example
+
+```python
+import torch
+from audioseal import AudioSeal
+
+# Load from model card
+generator = AudioSeal.load_generator("audioseal_wm_16bits")
+
+# Load with custom device and dtype
+generator = AudioSeal.load_generator(
+    "audioseal_wm_16bits",
+    device="cuda",
+    dtype=torch.float16
+)
+
+# Load from Hugging Face
+generator = AudioSeal.load_generator(
+    "facebook/audioseal/generator_base.pth"
+)
+
+# Load from local checkpoint
+generator = AudioSeal.load_generator(
+    "/path/to/checkpoint.pth",
+    device="cuda"
+)
+```
+
+---
+
+### load_detector
+
+Load a pre-trained AudioSeal watermark detector model.
+
+```python
+from audioseal import AudioSeal
+
+detector = AudioSeal.load_detector(
+    model_card_or_path="audioseal_detector_16bits",
+    device="cuda"
+)
+```
+
+#### Parameters
+
+<ParamField path="model_card_or_path" type="str" required>
+  Model card name or path to checkpoint. Can be:
+  - A local model card name (e.g., "audioseal_detector_16bits")
+  - A path to a local checkpoint file
+  - A Hugging Face model path (e.g., "facebook/audioseal/detector_base.pth")
+  - An HTTPS URL to a checkpoint
+</ParamField>
+
+<ParamField path="nbits" type="int" default="None">
+  Number of bits for the watermark message. If not specified, uses the value from the model config.
+</ParamField>
+
+<ParamField path="device" type="Device" default="None">
+  Device to load the model on (e.g., "cpu", "cuda", "cuda:0"). If None, defaults to CPU.
+</ParamField>
+
+<ParamField path="dtype" type="DataType" default="None">
+  Data type for model parameters (e.g., torch.float32, torch.float16). If None, uses default precision.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="detector" type="AudioSealDetector">
+  The loaded detector model ready for watermark detection.
+</ResponseField>
+
+#### Example
+
+```python
+import torch
+from audioseal import AudioSeal
+
+# Load from model card
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+
+# Load with custom device and dtype
+detector = AudioSeal.load_detector(
+    "audioseal_detector_16bits",
+    device="cuda",
+    dtype=torch.float16
+)
+
+# Load from Hugging Face
+detector = AudioSeal.load_detector(
+    "facebook/audioseal/detector_base.pth"
+)
+
+# Load from local checkpoint
+detector = AudioSeal.load_detector(
+    "/path/to/checkpoint.pth",
+    device="cuda"
+)
+```
+
+## Notes
+
+- Model checkpoints are cached in `~/.cache/audioseal` by default
+- You can override the cache directory using the `AUDIOSEAL_CACHE_DIR` environment variable
+- For Hugging Face models, the library will automatically handle authentication if needed
+- Loading gated models requires the `huggingface_hub` package installed
+
+## See Also
+
+- [AudioSealWM](/api/generator) - Generator model class
+- [AudioSealDetector](/api/detector) - Detector model class
+- [Quick Start Guide](/quickstart) - Getting started with AudioSeal

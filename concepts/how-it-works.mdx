@@ -1,0 +1,245 @@
+---
+title: 'How AudioSeal Works'
+description: 'Understanding the architecture and methodology behind AudioSeal'
+icon: 'cogs'
+---
+
+## Overview
+
+AudioSeal is a neural audio watermarking system that jointly trains two deep learning models:
+
+<CardGroup cols={2}>
+  <Card title="Generator" icon="wand-magic-sparkles">
+    Embeds imperceptible watermarks into audio signals
+  </Card>
+  <Card title="Detector" icon="magnifying-glass">
+    Identifies watermarked segments with sample-level precision
+  </Card>
+</CardGroup>
+
+The system is designed to be **fast**, **robust**, and **localized**, enabling real-time watermark detection even in edited or compressed audio.
+
+## Architecture
+
+### SEANet Encoder-Decoder Foundation
+
+Both the generator and detector are built on the **SEANet** (Sound Enhancement Audio Network) architecture, which provides efficient audio processing through:
+
+```python
+# From audioseal/libs/moshi/modules/seanet.py
+class SEANetEncoder(StreamingContainer):
+    """
+    SEANet encoder with:
+    - channels: Audio channels (typically 1 for mono)
+    - dimension: Intermediate representation dimension
+    - n_filters: Base width for the model
+    - n_residual_layers: Number of residual layers
+    - ratios: Downsampling/upsampling ratios
+    """
+```
+
+<AccordionGroup>
+  <Accordion title="Key Architecture Features">
+    - **Residual Blocks**: SEANetResnetBlock components with dilated convolutions
+    - **Strided Convolutions**: Efficient temporal downsampling using configurable ratios (e.g., [8, 5, 4, 2])
+    - **Streaming Support**: Maintains convolutional cache for real-time processing
+    - **Causal Processing**: Optional causal convolutions for streaming applications
+  </Accordion>
+  
+  <Accordion title="Architecture Parameters">
+    The SEANet architecture is configured through:
+    - `n_filters`: Base channel width (typically 32)
+    - `dimension`: Hidden representation size (typically 128)
+    - `n_residual_layers`: Depth of residual processing (typically 3)
+    - `ratios`: Temporal compression factors
+    - `kernel_size`: Convolution window sizes
+  </Accordion>
+</AccordionGroup>
+
+### Generator Architecture
+
+The watermark generator (`AudioSealWM` class) consists of three main components:
+
+```
+┌─────────────┐
+│  Input      │
+│  Audio      │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  SEANet     │  Encodes audio into latent representation
+│  Encoder    │  (with temporal downsampling)
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  Message    │  Embeds optional 16-bit secret message
+│  Processor  │  into the latent representation
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  SEANet     │  Decodes back to audio-rate watermark
+│  Decoder    │  (with temporal upsampling)
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  Watermark  │  Same length as input audio
+│  Signal     │
+└─────────────┘
+```
+
+### Detector Architecture
+
+The watermark detector (`AudioSealDetector` class) uses:
+
+```
+┌─────────────┐
+│  Input      │
+│  Audio      │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  SEANet     │  Processes audio while maintaining
+│  Encoder    │  temporal dimension (KeepDimension)
+│  KeepDim    │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  Conv1d     │  Projects to (2 + nbits) channels:
+│  1x1        │  - 2 for detection logits
+└──────┬──────┘  - nbits for message decoding
+       │
+       ▼
+┌─────────────┐
+│  Detection  │  Frame-by-frame probabilities
+│  + Message  │  and decoded message bits
+└─────────────┘
+```
+
+Key difference: The detector uses `SEANetEncoderKeepDimension` to preserve temporal resolution, enabling **localized detection** at every audio frame.
+
+## Training Methodology
+
+AudioSeal uses a joint training approach with several key innovations:
+
+### 1. Joint Training
+
+<Steps>
+  <Step title="Generate Watermark">
+    The generator creates a watermark signal from clean audio and an optional message
+  </Step>
+  <Step title="Add to Audio">
+    The watermark is added to the original audio with a scaling factor (alpha)
+  </Step>
+  <Step title="Apply Augmentations">
+    Random audio transformations simulate real-world edits (compression, noise, etc.)
+  </Step>
+  <Step title="Detect Watermark">
+    The detector attempts to identify watermarked regions and decode the message
+  </Step>
+  <Step title="Compute Loss">
+    Multiple loss terms optimize for imperceptibility, detectability, and robustness
+  </Step>
+</Steps>
+
+### 2. Perceptual Loss Function
+
+The training uses a novel perceptual loss that balances multiple objectives:
+
+<Note>
+  The perceptual loss is designed to ensure watermarks are **imperceptible** while remaining **detectable** and **robust** to audio transformations.
+</Note>
+
+**Loss Components:**
+
+- **Perceptual Similarity**: Ensures watermarked audio sounds identical to the original
+- **Detection Loss**: Maximizes detector confidence on watermarked audio
+- **Message Decoding Loss**: Ensures accurate message recovery when present
+- **Robustness Loss**: Maintains detection after augmentations (compression, noise, resampling)
+
+### 3. Training Data
+
+AudioSeal is trained on large-scale speech datasets:
+
+- **VoxPopuli**: 400K hours of unlabeled speech data
+- **Sample Rate**: 16 kHz (with support for 24 kHz, 44.1 kHz, 48 kHz)
+- **Augmentations**: AAC compression, MP3 compression, additive noise, resampling, time stretching
+
+<Tip>
+  The model generalizes well to other sample rates due to its architecture and training augmentations.
+</Tip>
+
+## Message Embedding
+
+The optional message embedding system allows encoding up to **65,536** unique identifiers (2^16):
+
+```python
+# From audioseal/models.py:39
+class MsgProcessor(torch.nn.Module):
+    """
+    Apply the secret message to the encoder output.
+    Args:
+        nbits: Number of bits (16 for standard AudioSeal)
+        hidden_size: Dimension of encoder output
+    """
+```
+
+The message processor:
+1. Takes a binary message of shape `(batch, 16)`
+2. Uses an embedding layer to map each bit to a hidden vector
+3. Adds the message representation to the encoder output
+4. The decoder then generates a watermark that encodes this message
+
+<Info>
+  The message is **optional** and does not affect detection. It can be used to identify model versions, track audio sources, or embed metadata.
+</Info>
+
+## Performance Characteristics
+
+<CardGroup cols={2}>
+  <Card title="Detection Speed" icon="gauge-high">
+    **2 orders of magnitude faster** than competing methods, enabling real-time processing
+  </Card>
+  <Card title="Robustness" icon="shield-halved">
+    Survives compression, re-encoding, noise addition, and various audio edits
+  </Card>
+  <Card title="Quality" icon="sparkles">
+    Minimal perceptual impact on audio quality
+  </Card>
+  <Card title="Localization" icon="location-crosshairs">
+    Sample-level precision (1/16,000 second at 16 kHz)
+  </Card>
+</CardGroup>
+
+## Key Innovations
+
+1. **Localized Watermarking**: Unlike traditional methods that watermark entire files, AudioSeal operates at the sample level
+2. **Single-Pass Detection**: Fast forward pass through a convolutional network (no iterative decoding)
+3. **Streaming Support**: Can process audio in real-time using convolutional caching
+4. **Joint Training**: Generator and detector are trained together for optimal performance
+
+<Check>
+  AudioSeal's architecture enables it to be both **imperceptible** and **robust**, solving a key challenge in audio watermarking.
+</Check>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Watermark Generation" icon="wand-magic-sparkles" href="/concepts/watermark-generation">
+    Learn how the generator creates watermarks
+  </Card>
+  <Card title="Watermark Detection" icon="magnifying-glass" href="/concepts/watermark-detection">
+    Understand the detection process
+  </Card>
+  <Card title="Localized Watermarking" icon="location-crosshairs" href="/concepts/localized-watermarking">
+    Explore sample-level precision
+  </Card>
+  <Card title="Training Guide" icon="graduation-cap" href="/guides/training">
+    Train your own model
+  </Card>
+</CardGroup>

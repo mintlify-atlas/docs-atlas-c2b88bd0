@@ -1,0 +1,206 @@
+---
+title: 'MsgProcessor'
+description: 'Embed secret messages into audio watermarks'
+icon: 'message'
+---
+
+## Overview
+
+The `MsgProcessor` class is responsible for embedding binary secret messages into the hidden representations produced by the encoder. It converts binary messages into learned embeddings that are added to the audio features before watermark generation.
+
+<Info>
+  The `MsgProcessor` is an internal component of `AudioSealWM` and is typically not instantiated directly by users.
+</Info>
+
+## Initialization
+
+```python
+from audioseal.models import MsgProcessor
+
+msg_processor = MsgProcessor(
+    nbits=16,
+    hidden_size=128
+)
+```
+
+### Parameters
+
+<ParamField path="nbits" type="int" required>
+  Number of bits in the secret message. Must be greater than 0. This determines the capacity of the watermark (e.g., 16 bits = 65,536 unique messages).
+</ParamField>
+
+<ParamField path="hidden_size" type="int" required>
+  Dimension of the encoder output features. Must match the encoder's output dimension to ensure proper integration.
+</ParamField>
+
+## Methods
+
+### forward
+
+Embed a binary message into the encoder's hidden representation.
+
+```python
+import torch
+
+# Encoder output
+hidden = torch.randn(4, 128, 100)  # batch x hidden x frames
+
+# Binary message
+message = torch.randint(0, 2, (4, 16))  # batch x nbits
+
+# Embed message
+modified_hidden = msg_processor(hidden, message)
+```
+
+#### Parameters
+
+<ParamField path="hidden" type="torch.Tensor" required>
+  Encoder output tensor of shape `(batch, hidden_size, frames)`. This is the intermediate audio representation before watermark generation.
+</ParamField>
+
+<ParamField path="msg" type="torch.Tensor" required>
+  Binary message tensor of shape `(batch, nbits)`. Each value must be 0 or 1, representing the bits of the secret message.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="modified_hidden" type="torch.Tensor">
+  Modified hidden representation of shape `(batch, hidden_size, frames)` with the message embedded. This tensor is then passed to the decoder to generate the watermark.
+</ResponseField>
+
+## How It Works
+
+The `MsgProcessor` uses an embedding layer to encode messages:
+
+1. **Embedding Creation**: For each bit position `i` in the message, two embeddings are learned:
+   - Embedding for bit `i = 0` at index `2*i`
+   - Embedding for bit `i = 1` at index `2*i + 1`
+
+2. **Message Encoding**: The binary message selects the appropriate embeddings for each bit position.
+
+3. **Feature Addition**: The sum of all selected embeddings is added to every frame of the hidden representation.
+
+This approach ensures that:
+- The message is embedded uniformly across all time frames
+- Each bit contributes independently to the watermark
+- The embedded message is learned during training for optimal robustness
+
+## Example Usage
+
+While you typically don't use `MsgProcessor` directly, here's how it works internally:
+
+```python
+import torch
+from audioseal.models import MsgProcessor
+
+# Create processor
+nbits = 16
+hidden_size = 128
+msg_processor = MsgProcessor(nbits=nbits, hidden_size=hidden_size)
+
+# Simulate encoder output
+batch_size = 2
+num_frames = 100
+hidden = torch.randn(batch_size, hidden_size, num_frames)
+
+# Create binary messages
+message1 = torch.tensor([1, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0])
+message2 = torch.tensor([0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1])
+messages = torch.stack([message1, message2])
+
+# Embed messages
+modified_hidden = msg_processor(hidden, messages)
+
+print(f"Input shape: {hidden.shape}")
+print(f"Message shape: {messages.shape}")
+print(f"Output shape: {modified_hidden.shape}")
+print(f"\nMessage embedding added to all {num_frames} frames")
+```
+
+## Integration in AudioSealWM
+
+The `MsgProcessor` is integrated into the generator pipeline:
+
+```python
+# Inside AudioSealWM.get_watermark()
+hidden = self.encoder(x)  # Encode audio
+
+if self.msg_processor is not None:
+    # Embed message into hidden representation
+    hidden = self.msg_processor(hidden, message)
+
+watermark = self.decoder(hidden)  # Generate watermark
+```
+
+## Design Considerations
+
+### Message Capacity
+
+The number of bits determines the message space:
+- 8 bits: 256 unique messages
+- 16 bits: 65,536 unique messages  
+- 32 bits: 4.3 billion unique messages
+
+More bits allow for more unique messages but may reduce robustness.
+
+### Hidden Size
+
+The `hidden_size` parameter must match the encoder's output dimension:
+- Typical values: 128, 256, or 512
+- Larger hidden sizes allow for more complex message embeddings
+- Must be coordinated with the overall model architecture
+
+### Zero-Bit Watermarking
+
+For detection-only watermarking without messages, the `MsgProcessor` is not used (`msg_processor=None` in `AudioSealWM`).
+
+## Attributes
+
+<ResponseField name="nbits" type="int">
+  Number of bits in the secret message.
+</ResponseField>
+
+<ResponseField name="hidden_size" type="int">
+  Dimension of the encoder output.
+</ResponseField>
+
+<ResponseField name="msg_processor" type="torch.nn.Embedding">
+  Embedding layer with shape `(2 * nbits, hidden_size)`. Maps each bit value at each position to a learned vector.
+</ResponseField>
+
+## Technical Details
+
+### Embedding Indices
+
+The embedding indices are computed as:
+
+```python
+# Base indices: [0, 2, 4, ..., 2*(nbits-1)]
+indices = 2 * torch.arange(nbits)
+
+# Offset by message bits: indices[i] + message[i]
+# If message[i] = 0: use index 2*i
+# If message[i] = 1: use index 2*i + 1
+indices = indices + message
+```
+
+### Broadcasting
+
+The message embedding is broadcast across time:
+
+```python
+# msg_aux shape: (batch, hidden_size)
+# Expand to: (batch, hidden_size, frames)
+msg_aux = msg_aux.unsqueeze(-1).repeat(1, 1, num_frames)
+
+# Add to hidden representation
+hidden = hidden + msg_aux
+```
+
+This ensures the message is consistently embedded throughout the entire audio duration.
+
+## See Also
+
+- [AudioSealWM](/api/generator) - Generator that uses MsgProcessor
+- [AudioSealDetector](/api/detector) - Detector that decodes messages
+- [Secret Messages Guide](/guides/secret-messages) - Working with custom messages

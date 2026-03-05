@@ -1,0 +1,481 @@
+---
+title: 'Localized Watermarking'
+description: 'Understanding sample-level precision in AudioSeal'
+icon: 'location-crosshairs'
+---
+
+## What is Localized Watermarking?
+
+Localized watermarking is AudioSeal's key innovation: the ability to detect watermarks at **sample-level precision** rather than treating entire audio files as a single unit. This means the detector can identify exactly **which portions** of an audio signal contain watermarks, down to 1/16,000 of a second (at 16 kHz sample rate).
+
+<CardGroup cols={2}>
+  <Card title="Traditional Watermarking" icon="file-audio">
+    **File-level detection**
+    
+    Outputs: "This entire file is watermarked" or "This entire file is not watermarked"
+  </Card>
+  <Card title="Localized Watermarking (AudioSeal)" icon="location-crosshairs">
+    **Frame-level detection**
+    
+    Outputs: "Frames 0-1000 are watermarked, frames 1001-2000 are not, frames 2001-3000 are watermarked..."
+  </Card>
+</CardGroup>
+
+## Sample-Level Precision
+
+### Temporal Resolution
+
+At 16 kHz sample rate, AudioSeal can detect watermarks with approximately:
+
+```
+1 / 16,000 seconds = 0.0000625 seconds = 62.5 microseconds
+```
+
+This is **faster than human perception** of audio events (~10 milliseconds), enabling:
+
+<Steps>
+  <Step title="Precise Localization">
+    Identify exact start and end times of watermarked segments
+  </Step>
+  <Step title="Edit Detection">
+    Detect where audio has been cut, spliced, or modified
+  </Step>
+  <Step title="Partial Watermarking">
+    Handle audio that's only partially watermarked
+  </Step>
+  <Step title="Real-Time Tracking">
+    Monitor watermark presence continuously during playback
+  </Step>
+</Steps>
+
+### How It Works
+
+The localized detection is enabled by the detector's architecture:
+
+```python
+# From audioseal/models.py:369
+encoder = SEANetEncoderKeepDimension(**detector_config)
+```
+
+Unlike the generator which compresses audio temporally, the detector uses `SEANetEncoderKeepDimension` to **preserve temporal information**:
+
+<AccordionGroup>
+  <Accordion title="Architecture Comparison">
+    **Generator Encoder (SEANetEncoder)**
+    ```
+    Input:  (batch, 1, 16000)     # 1 second at 16kHz
+    Output: (batch, 128, 50)      # Compressed 320x
+    ```
+    Temporal compression enables efficient watermark generation.
+    
+    **Detector Encoder (SEANetEncoderKeepDimension)**
+    ```
+    Input:  (batch, 1, 16000)     # 1 second at 16kHz  
+    Output: (batch, 32, ~16000)   # Temporal dimension preserved
+    ```
+    Temporal preservation enables frame-by-frame detection.
+  </Accordion>
+  
+  <Accordion title="Detection Head">
+    After the encoder, a 1x1 convolution produces per-frame predictions:
+    
+    ```python
+    last_layer = torch.nn.Conv1d(encoder.output_dim, 2 + nbits, 1)
+    result = self.detector(x)  # Shape: (batch, 2+nbits, frames)
+    ```
+    
+    Each time step in the output corresponds to a prediction for that specific moment in the audio.
+  </Accordion>
+</AccordionGroup>
+
+## Visualizing Localized Detection
+
+Let's see what localized detection looks like in practice:
+
+```python
+import matplotlib.pyplot as plt
+import torch
+from audioseal import AudioSeal
+
+# Load detector
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+detector.eval()
+
+# Detect watermarks
+result, message = detector(audio)  # audio shape: (1, 1, 16000)
+wm_prob = result[0, 1, :].cpu().numpy()  # Watermark probability per frame
+
+# Create time axis
+time = torch.arange(len(wm_prob)) / 16000  # Convert frames to seconds
+
+# Plot
+plt.figure(figsize=(12, 4))
+plt.plot(time, wm_prob)
+plt.axhline(y=0.5, color='r', linestyle='--', label='Threshold')
+plt.xlabel('Time (seconds)')
+plt.ylabel('Watermark Probability')
+plt.title('Localized Watermark Detection')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+```
+
+<Note>
+  The plot would show probability spikes in watermarked regions and low probabilities in non-watermarked regions, clearly visualizing **where** watermarks exist.
+</Note>
+
+## Benefits Over Traditional Watermarking
+
+### 1. Robustness to Editing
+
+<Tabs>
+  <Tab title="Scenario">
+    Imagine a 10-second watermarked audio clip is inserted into the middle of a 60-second unwatermarked recording:
+    
+    ```
+    [0-25s: Clean] + [25-35s: Watermarked] + [35-60s: Clean]
+    ```
+  </Tab>
+  
+  <Tab title="Traditional Detection">
+    A traditional detector might:
+    - Fail completely (entire file flagged as unwatermarked)
+    - Give uncertain results (mixed signals)
+    - Require processing multiple segments separately
+  </Tab>
+  
+  <Tab title="AudioSeal Detection">
+    AudioSeal easily identifies:
+    ```python
+    result, message = detector(edited_audio)
+    wm_prob = result[0, 1, :]
+    
+    # Detect watermarked region
+    watermarked = wm_prob > 0.5
+    # Will show True for frames ~400,000 to 560,000
+    # (25s * 16000 to 35s * 16000)
+    ```
+    
+    **Precise localization** of the watermarked segment!
+  </Tab>
+</Tabs>
+
+### 2. Tamper Detection
+
+Localized detection enables identifying audio manipulation:
+
+```python
+def detect_tampering(audio, detector, threshold=0.5):
+    """Detect if watermarked audio has been edited."""
+    result, _ = detector(audio)
+    wm_prob = result[0, 1, :].cpu().numpy()
+    
+    # Find transitions (watermarked -> not watermarked)
+    is_watermarked = wm_prob > threshold
+    transitions = np.diff(is_watermarked.astype(int))
+    
+    num_transitions = np.sum(np.abs(transitions))
+    
+    if num_transitions == 0:
+        return "Fully watermarked (no edits detected)"
+    elif num_transitions == 2:  # One start, one end
+        return "Partially watermarked (possible concatenation)"
+    else:
+        return f"Multiple transitions detected ({num_transitions}) - likely edited"
+```
+
+<Check>
+  This enables **tamper-evident** watermarking: you can detect not just whether audio is watermarked, but whether it's been modified.
+</Check>
+
+### 3. Streaming and Real-Time Detection
+
+Because detection is frame-by-frame, you can monitor watermarks in real-time:
+
+```python
+# Pseudo-code for streaming detection
+detector = AudioSeal.load_detector("audioseal_detector_16bits")
+
+audio_stream = get_audio_stream()  # e.g., from microphone
+
+for chunk in audio_stream:
+    result, message = detector(chunk)
+    wm_prob = result[0, 1, :].mean()  # Average probability for chunk
+    
+    if wm_prob > 0.5:
+        print(f"⚠️ Watermarked audio detected! Message: {message}")
+        # Take action (e.g., flag content, trigger alert)
+    else:
+        print("✓ Clean audio")
+```
+
+### 4. Forensic Analysis
+
+Localized detection supports detailed forensic investigation:
+
+```python
+def forensic_analysis(audio, detector, sample_rate=16000):
+    """Detailed analysis of watermark presence."""
+    result, message = detector(audio)
+    wm_prob = result[0, 1, :].cpu().numpy()
+    
+    # Statistics
+    total_frames = len(wm_prob)
+    watermarked_frames = np.sum(wm_prob > 0.5)
+    watermark_percentage = (watermarked_frames / total_frames) * 100
+    
+    # Temporal analysis
+    watermarked_regions = []
+    in_region = False
+    start = 0
+    
+    for i, prob in enumerate(wm_prob):
+        if prob > 0.5 and not in_region:
+            start = i
+            in_region = True
+        elif prob <= 0.5 and in_region:
+            watermarked_regions.append((start / sample_rate, i / sample_rate))
+            in_region = False
+    
+    if in_region:
+        watermarked_regions.append((start / sample_rate, len(wm_prob) / sample_rate))
+    
+    # Report
+    print(f"Total duration: {total_frames / sample_rate:.2f}s")
+    print(f"Watermarked: {watermark_percentage:.1f}%")
+    print(f"Detected message: {message}")
+    print(f"\nWatermarked regions:")
+    for i, (start, end) in enumerate(watermarked_regions, 1):
+        print(f"  Region {i}: {start:.3f}s - {end:.3f}s ({end-start:.3f}s)")
+    
+    return watermarked_regions
+```
+
+## Technical Implementation
+
+### Frame-by-Frame Processing
+
+The detector outputs a probability for **each frame**:
+
+```python
+# From audioseal/models.py:390
+def detect_watermark(
+    self,
+    x: torch.Tensor,
+    detection_threshold: float = 0.5,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    result, message = self.forward(x)
+    
+    # result[:, 1, :] contains per-frame watermark probability
+    # Shape: (batch, frames)
+    
+    # Count frames above threshold
+    detect_prob = (
+        torch.count_nonzero(
+            torch.gt(result[:, 1, :], detection_threshold), dim=-1
+        ) / result.shape[-1]
+    )
+    
+    return detect_prob, message
+```
+
+<Info>
+  The overall detection probability is simply the **proportion of frames** with watermark probability above threshold. This aggregation provides a single score while preserving fine-grained information.
+</Info>
+
+### Memory and Computational Considerations
+
+Localized detection requires more memory than compressed representations:
+
+<Tabs>
+  <Tab title="Memory Usage">
+    **Generator** (with temporal compression):
+    ```
+    1 second audio (16,000 samples) → 50 latent frames
+    Memory: ~50 × 128 × 4 bytes = 25.6 KB (per batch item)
+    ```
+    
+    **Detector** (without temporal compression):
+    ```
+    1 second audio (16,000 samples) → ~16,000 frames
+    Memory: ~16,000 × 32 × 4 bytes = 2,048 KB (per batch item)
+    ```
+    
+    Detector uses ~80x more memory for intermediate representations.
+  </Tab>
+  
+  <Tab title="Speed">
+    Despite larger memory footprint, detection is still very fast:
+    - Single forward pass through the network
+    - No iterative decoding required
+    - GPU-accelerated convolutions
+    
+    **Real-time factor**: ~0.05x (20x faster than real-time on GPU)
+    
+    This is still **orders of magnitude faster** than traditional watermark detectors that use iterative correlation-based methods.
+  </Tab>
+  
+  <Tab title="Batch Processing">
+    For processing large datasets:
+    ```python
+    # Process multiple files efficiently
+    batch_size = 8  # Adjust based on GPU memory
+    
+    for batch in dataloader:
+        # batch shape: (8, 1, variable_length)
+        results = detector(batch)
+        # Process results...
+    ```
+    
+    Batch processing amortizes overhead and maximizes GPU utilization.
+  </Tab>
+</Tabs>
+
+## Comparison with Other Approaches
+
+<CardGroup cols={3}>
+  <Card title="Traditional Spread Spectrum" icon="signal">
+    **Detection**: Global correlation
+    
+    **Pros**: Well-established, theoretically sound
+    
+    **Cons**: Slow, file-level only, not robust to edits
+  </Card>
+  
+  <Card title="Patchwork/LSB" icon="puzzle-piece">
+    **Detection**: Statistical analysis of regions
+    
+    **Pros**: Fast embedding
+    
+    **Cons**: Not robust, limited to specific domains, no localization
+  </Card>
+  
+  <Card title="AudioSeal (Neural)" icon="brain">
+    **Detection**: Deep learning, frame-by-frame
+    
+    **Pros**: Fast, robust, localized, high accuracy
+    
+    **Cons**: Requires training, GPU for best speed
+  </Card>
+</CardGroup>
+
+## Practical Applications
+
+### 1. Content Verification
+
+```python
+def verify_audio_authenticity(audio_file, detector):
+    """Check if audio is fully watermarked (not tampered)."""
+    audio = load_audio(audio_file)
+    result, message = detector(audio)
+    wm_prob = result[0, 1, :]
+    
+    coverage = (wm_prob > 0.5).float().mean().item()
+    
+    if coverage > 0.99:
+        return "Authentic", message
+    elif coverage > 0.5:
+        return "Partially modified", message
+    else:
+        return "Not authentic or heavily modified", None
+```
+
+### 2. AI-Generated Content Detection
+
+```python
+def check_ai_generated(audio, detector, expected_message):
+    """Verify if audio was generated by a specific AI model."""
+    detect_prob, message = detector.detect_watermark(audio)
+    
+    if detect_prob < 0.5:
+        return "Not watermarked - origin unknown"
+    
+    if torch.equal(message, expected_message):
+        return f"Confirmed: Generated by AI model {expected_message}"
+    else:
+        return f"Watermarked but message mismatch: {message}"
+```
+
+### 3. Broadcast Monitoring
+
+```python
+def monitor_broadcast(audio_stream, detector, model_id):
+    """Monitor live audio stream for AI-generated content."""
+    for chunk in audio_stream:
+        result, message = detector(chunk)
+        wm_prob = result[0, 1, :].mean()
+        
+        if wm_prob > 0.5 and torch.equal(message, model_id):
+            timestamp = time.time()
+            alert(f"AI-generated content detected at {timestamp}")
+            # Log, alert, or take other actions
+```
+
+## Limitations and Considerations
+
+<Warning>
+  While localized detection is powerful, there are some considerations:
+</Warning>
+
+<AccordionGroup>
+  <Accordion title="Boundary Effects">
+    At the edges of watermarked regions, detection probability may gradually transition rather than showing sharp boundaries. This is due to:
+    - Receptive field of the convolutional network
+    - Temporal smoothing in the architecture
+    
+    Typically affects ~0.1-0.5 seconds at boundaries.
+  </Accordion>
+  
+  <Accordion title="Short Segments">
+    Very short watermarked segments (< 0.5 seconds) may be harder to detect reliably due to:
+    - Limited evidence to aggregate
+    - Boundary effects being proportionally larger
+    
+    Best performance is achieved with segments > 1 second.
+  </Accordion>
+  
+  <Accordion title="Extreme Edits">
+    While robust to many transformations, extreme modifications can affect localization accuracy:
+    - Time stretching > 20%
+    - Pitch shifting > 2 semitones  
+    - Very aggressive compression (< 16 kbps)
+  </Accordion>
+</AccordionGroup>
+
+## Summary
+
+Localized watermarking is what makes AudioSeal uniquely powerful:
+
+<Check>
+  **Sample-level precision** (1/16,000 second) enables detection in edited audio
+</Check>
+
+<Check>
+  **Frame-by-frame probabilities** provide fine-grained information about watermark presence
+</Check>
+
+<Check>
+  **Tamper detection** identifies where audio has been modified
+</Check>
+
+<Check>
+  **Real-time monitoring** tracks watermarks continuously in streaming audio
+</Check>
+
+<Check>
+  **Forensic analysis** supports detailed investigation of audio authenticity
+</Check>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="How It Works" icon="cogs" href="/concepts/how-it-works">
+    Understand the overall architecture
+  </Card>
+  <Card title="Detection API" icon="code" href="/api-reference/detector">
+    Explore detection methods
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Try AudioSeal yourself
+  </Card>
+</CardGroup>

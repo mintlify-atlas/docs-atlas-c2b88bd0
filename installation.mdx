@@ -1,0 +1,221 @@
+---
+title: Installation
+description: Install AudioSeal via pip or from source, with all required dependencies
+---
+
+# Installation
+
+AudioSeal can be installed via pip from PyPI or built from source. Follow the instructions below based on your needs.
+
+## Requirements
+
+Before installing AudioSeal, ensure your environment meets these requirements:
+
+- **Python** ≥ 3.8 (≥ 3.10 for streaming support)
+- **PyTorch** ≥ 1.13.0
+- **Omegaconf** - Configuration management
+- **NumPy** - Numerical operations
+- **einops** - Tensor operations (required for streaming support with Python ≥ 3.10)
+
+<Note>
+For streaming support, you must use Python 3.10 or higher. Streaming features are not available in Python 3.8 or 3.9.
+</Note>
+
+## Install from PyPI
+
+The simplest way to install AudioSeal is using pip:
+
+<CodeGroup>
+```bash pip
+pip install audioseal
+```
+
+```bash pip with upgrade
+pip install --upgrade audioseal
+```
+</CodeGroup>
+
+This will install AudioSeal version 0.2.0 and all required dependencies.
+
+## Install from Source
+
+For development or to use the latest features, you can install AudioSeal from source:
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone the AudioSeal repository from GitHub:
+    
+    ```bash
+    git clone https://github.com/facebookresearch/audioseal
+    cd audioseal
+    ```
+  </Step>
+  
+  <Step title="Install in editable mode">
+    Install the package in editable mode using pip:
+    
+    ```bash
+    pip install -e .
+    ```
+    
+    This allows you to make changes to the source code and have them immediately reflected without reinstalling.
+  </Step>
+</Steps>
+
+## Optional Dependencies
+
+For development or advanced features, you may want to install additional dependencies:
+
+<CodeGroup>
+```bash Development dependencies
+pip install audioseal[dev]
+```
+
+```bash Manual installation
+pip install audioseal
+pip install torchaudio soundfile pytest black isort flake8 pre-commit
+```
+</CodeGroup>
+
+Development dependencies include:
+
+- **torchaudio** - Audio I/O and processing
+- **soundfile** - Alternative audio backend
+- **pytest** - Testing framework
+- **black** - Code formatting
+- **isort** - Import sorting
+- **flake8** - Linting
+- **pre-commit** - Git hooks
+
+<Warning>
+If using torchaudio ≥ 2.2.0 and encountering URI backend errors, either downgrade to torchaudio 2.1.0 or install `soundfile` as your audio backend:
+
+```bash
+pip install soundfile
+```
+</Warning>
+
+## Verify Installation
+
+After installation, verify that AudioSeal is working correctly:
+
+```python
+import audioseal
+import torch
+
+print(f"AudioSeal version: {audioseal.__version__}")
+print(f"PyTorch version: {torch.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+```
+
+Expected output:
+```
+AudioSeal version: 0.2.0
+PyTorch version: 2.x.x
+CUDA available: True/False
+```
+
+## Platform-Specific Notes
+
+### Windows
+
+On Windows, if you encounter the error:
+```
+KeyError raised while resolving interpolation: "Environment variable 'USER' not found"
+```
+
+This is due to an incompatibility with older cached checkpoints. Clear the cache:
+
+```bash
+rmdir /s "C:\Users\<USERNAME>\.cache\audioseal"
+```
+
+Then re-run your code to download fresh checkpoints.
+
+### macOS / Linux
+
+AudioSeal works out of the box on macOS and Linux. For GPU acceleration, ensure you have CUDA installed and a compatible PyTorch build:
+
+<CodeGroup>
+```bash CUDA 11.8
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install audioseal
+```
+
+```bash CUDA 12.1
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install audioseal
+```
+
+```bash CPU only
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install audioseal
+```
+</CodeGroup>
+
+## Model Checkpoints
+
+AudioSeal automatically downloads model checkpoints from Hugging Face on first use. Checkpoints are cached in:
+
+- **Linux/macOS**: `~/.cache/audioseal/`
+- **Windows**: `C:\Users\<USERNAME>\.cache\audioseal\`
+
+You can customize the cache location by setting the `AUDIOSEAL_CACHE_DIR` environment variable:
+
+```bash
+export AUDIOSEAL_CACHE_DIR=/path/to/custom/cache
+```
+
+## Hugging Face Hub
+
+AudioSeal integrates with Hugging Face Hub for model downloads. For gated or private models, you may need to authenticate:
+
+```bash
+pip install huggingface_hub
+huggingface-cli login
+```
+
+Available model checkpoints:
+- `audioseal_wm_16bits` - Generator with 16-bit message support
+- `audioseal_detector_16bits` - Detector with 16-bit message decoding
+- `audioseal_wm_streaming` - Generator with streaming support
+- `audioseal_detector_streaming` - Detector for streaming mode
+
+## Troubleshooting
+
+### Common Issues
+
+<Accordion title="ValueError: not enough values to unpack (expected 3, got 2)">
+This occurs when the input audio tensor is missing the batch dimension. Add a batch dimension:
+
+```python
+# Wrong
+watermark = model.get_watermark(wav)
+
+# Correct
+watermark = model.get_watermark(wav.unsqueeze(0))
+```
+</Accordion>
+
+<Accordion title="ImportError: cannot import name 'AudioSeal'">
+Ensure you've installed the correct version and there are no conflicting packages:
+
+```bash
+pip uninstall audioseal
+pip install audioseal
+```
+</Accordion>
+
+<Accordion title="CUDA out of memory">
+Process audio in smaller batches or use CPU:
+
+```python
+model = AudioSeal.load_generator("audioseal_wm_16bits", device="cpu")
+```
+</Accordion>
+
+## Next Steps
+
+Now that AudioSeal is installed, try the quickstart guide to watermark your first audio file:
+
+[Quickstart Guide →](/quickstart)

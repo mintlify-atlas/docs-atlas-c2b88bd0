@@ -1,0 +1,450 @@
+---
+title: 'Training Custom Models'
+description: 'Train your own AudioSeal watermarking models from scratch'
+icon: 'brain'
+---
+
+This guide shows you how to train custom AudioSeal models using your own datasets and configurations.
+
+<Note>
+The training pipeline was developed using [AudioCraft](https://github.com/facebookresearch/audiocraft) (version 1.4.0a1 and later) with PyTorch 2.1.0 and torchaudio 2.1.0.
+</Note>
+
+## Prerequisites
+
+Before starting, ensure you have the required dependencies:
+
+<Steps>
+  <Step title="Install AudioCraft">
+    AudioCraft >=1.4.0a1 is required. Install from source for maximum flexibility:
+    
+    ```bash
+    git clone https://github.com/facebookresearch/audiocraft.git
+    cd audiocraft
+    pip install -e .
+    ```
+  </Step>
+  
+  <Step title="Install ffmpeg">
+    ffmpeg (version less than 5.0.0) is **mandatory** for AAC augmentation during training:
+    
+    ```bash
+    # On Ubuntu/Debian
+    sudo apt-get install ffmpeg
+    
+    # Or with Anaconda/Miniconda
+    conda install "ffmpeg<5" -c conda-forge
+    ```
+    
+    <Warning>
+    Training will fail without ffmpeg, as AAC augmentation depends on it.
+    </Warning>
+  </Step>
+  
+  <Step title="Verify Installation">
+    Check that AudioCraft and ffmpeg are properly installed:
+    
+    ```bash
+    python -c "import audiocraft; print(audiocraft.__version__)"
+    ffmpeg -version
+    ```
+  </Step>
+</Steps>
+
+## Dataset Preparation
+
+AudioSeal requires datasets in AudioCraft's format. Here's how to prepare them:
+
+### Using VoxPopuli (Paper Dataset)
+
+VoxPopuli is the dataset used in the AudioSeal paper:
+
+```bash
+# Download the VoxPopuli tools
+git clone https://github.com/facebookresearch/voxpopuli.git
+cd voxpopuli
+
+# Download and segment the raw audio
+python -m voxpopuli.download_audios --root [ROOT] --subset 400k
+python -m voxpopuli.get_unlabelled_data --root [ROOT] --subset 400k
+
+# Prepare the manifest with AudioCraft
+cd [PATH_TO_AUDIOCRAFT]
+python -m audiocraft.data.audio_dataset [ROOT] egs/voxpopuli/data.jsonl.gz
+```
+
+### Dataset Configuration File
+
+Create a dataset configuration file at `[audiocraft_root]/configs/dset/audio/voxpopuli.yaml`:
+
+```yaml voxpopuli.yaml
+# @package __global__
+
+datasource:
+  max_sample_rate: 16000
+  max_channels: 1
+
+  train: egs/voxpopuli
+  valid: egs/voxpopuli
+  evaluate: egs/voxpopuli
+  generate: egs/voxpopuli
+```
+
+### Using Custom Datasets
+
+For your own dataset:
+
+<Steps>
+  <Step title="Organize Audio Files">
+    Collect your audio files in a directory structure
+  </Step>
+  
+  <Step title="Create Manifest">
+    Use AudioCraft's data tool to create a manifest:
+    
+    ```bash
+    python -m audiocraft.data.audio_dataset \
+      /path/to/your/audio/files \
+      /path/to/output/manifest.jsonl.gz
+    ```
+  </Step>
+  
+  <Step title="Create Config File">
+    Create a YAML config file in `configs/dset/audio/` with your dataset paths
+  </Step>
+</Steps>
+
+See the [AudioCraft dataset documentation](https://github.com/facebookresearch/audiocraft/blob/main/docs/DATASETS.md) for detailed instructions.
+
+## Training with Dora
+
+AudioSeal uses [Dora](https://github.com/facebookresearch/dora) for experiment management and hyperparameter tuning.
+
+### Basic Training Command
+
+Test the training pipeline locally:
+
+```bash
+# Navigate to AudioCraft directory
+cd [PATH_TO_AUDIOCRAFT]
+
+# Run training with example dataset
+dora run solver=watermark/robustness dset=audio/example
+
+# Run with VoxPopuli
+dora run solver=watermark/robustness dset=audio/voxpopuli
+```
+
+<Note>
+By default, checkpoints and experiment files are stored in `/tmp/audiocraft_$USER/outputs`.
+</Note>
+
+### Custom Dora Configuration
+
+To customize output directories and run on a SLURM cluster, create a config file:
+
+```yaml my_config.yaml
+default:
+  dora_dir: /path/to/your/dora/experiments
+  partitions:
+    global: your_slurm_partition
+    team: your_slurm_partition
+  reference_dir: /tmp
+
+darwin:  # Mac-specific config for local testing
+  dora_dir: /path/to/local/dora/experiments
+  partitions:
+    global: your_slurm_partition
+    team: your_slurm_partition
+  reference_dir: /path/to/reference
+```
+
+Run training with custom config:
+
+```bash
+AUDIOCRAFT_CONFIG=my_config.yaml dora run \
+  solver=watermark/robustness \
+  dset=audio/voxpopuli
+```
+
+### Training Parameters
+
+Common parameters you can override:
+
+```bash
+# Train with specific number of bits
+dora run solver=watermark/robustness \
+  dset=audio/voxpopuli \
+  +dummy_watermarker.nbits=16
+
+# Adjust model architecture
+dora run solver=watermark/robustness \
+  dset=audio/voxpopuli \
+  seanet.detector.output_dim=32
+
+# Multi-GPU training
+dora run solver=watermark/robustness \
+  dset=audio/voxpopuli \
+  device=cuda \
+  ddp.world_size=4
+```
+
+### Running Training Grids
+
+For hyperparameter sweeps, use Dora grids:
+
+```bash
+# Reproduce the HuggingFace AudioSeal model (from ICML paper)
+AUDIOCRAFT_CONFIG=my_config.yaml \
+AUDIOCRAFT_DSET=audio/voxpopuli \
+dora grid watermarking.1315_kbits_seeds
+```
+
+This runs multiple experiments with different hyperparameter combinations. See the [AudioCraft watermarking grid](https://github.com/facebookresearch/audiocraft/blob/main/audiocraft/grids/watermarking/kbits.py) for details.
+
+## Checkpoint Evaluation
+
+After training completes, evaluate your checkpoints:
+
+### Locate Checkpoints
+
+Checkpoints are saved to:
+
+```
+[DORA_DIR]/xps/[HASH-ID]/checkpoint_XXX.th
+```
+
+The `HASH-ID` is shown in the output log when running `dora run`.
+
+### Evaluate a Checkpoint
+
+```bash
+AUDIOCRAFT_CONFIG=my_config.yaml dora run \
+  solver=watermark/robustness \
+  execute_only=evaluate \
+  dset=audio/voxpopuli \
+  continue_from=/path/to/checkpoint_XXX.th \
+  +dummy_watermarker.nbits=16 \
+  seanet.detector.output_dim=32
+```
+
+<Note>
+Evaluate with different `nbits` settings to find the best configuration for your use case.
+</Note>
+
+## Converting Checkpoints for Inference
+
+Training checkpoints contain both the generator and detector. Extract them separately for use with AudioSeal API:
+
+### Run Conversion Script
+
+```bash
+python [AUDIOSEAL_PATH]/src/scripts/checkpoints.py \
+  --checkpoint=/path/to/checkpoint_XXX.th \
+  --outdir=/path/to/output \
+  --suffix=my_model
+```
+
+This creates:
+- `generator_my_model.pth`
+- `detector_my_model.pth`
+
+### Use Converted Checkpoints
+
+```python
+from audioseal import AudioSeal
+
+# Load your custom models
+model = AudioSeal.load_generator(
+    "/path/to/output/generator_my_model.pth",
+    nbits=16
+)
+
+detector = AudioSeal.load_detector(
+    "/path/to/output/detector_my_model.pth",
+    nbits=16
+)
+
+# Use as normal
+watermark = model.get_watermark(wav)
+result, message = detector.detect_watermark(watermarked_audio)
+```
+
+## Training Configuration
+
+Key hyperparameters in the training configuration:
+
+<CodeGroup>
+```yaml Model Architecture
+# SEANet encoder/decoder configuration
+seanet:
+  channels: 1
+  dimension: 128
+  n_filters: 32
+  n_residual_layers: 1
+  ratios: [8, 5, 4, 2]
+  activation: ELU
+  norm: weight_norm
+  
+  encoder:
+    output_dim: 128
+  
+  decoder:
+    output_dim: 1
+  
+  detector:
+    output_dim: 32  # 2 + nbits
+```
+
+```yaml Training Parameters
+# Training configuration
+optim:
+  optimizer: adam
+  lr: 1e-4
+  beta1: 0.9
+  beta2: 0.999
+  weight_decay: 0.0
+
+batch_size: 16
+max_epochs: 100
+gradient_clip_val: 1.0
+```
+
+```yaml Watermark Settings
+# Watermark-specific settings
+dummy_watermarker:
+  nbits: 16  # Number of bits for secret message
+  
+# Augmentation settings
+audio_augmentation:
+  - aac_compression
+  - mp3_compression  
+  - pink_noise
+  - echo
+  - lowpass_filter
+```
+</CodeGroup>
+
+## Troubleshooting
+
+### Unsupported Formats Error (Linux)
+
+If you encounter `Unsupported formats` errors:
+
+```bash
+# Add your conda environment libs to LD_LIBRARY_PATH
+LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH \
+AUDIOCRAFT_CONFIG=my_config.yaml \
+dora run solver=watermark/robustness dset=audio/voxpopuli
+```
+
+### ffmpeg Not Found
+
+Ensure ffmpeg is installed and accessible:
+
+```bash
+which ffmpeg  # Should show path to ffmpeg
+ffmpeg -version  # Should show version < 5.0.0
+```
+
+### Out of Memory
+
+Reduce batch size or sequence length:
+
+```bash
+dora run solver=watermark/robustness \
+  dset=audio/voxpopuli \
+  batch_size=8 \
+  max_segment_length=10.0
+```
+
+### SLURM Issues
+
+Verify partition names in your config:
+
+```yaml
+partitions:
+  global: correct_partition_name
+  team: correct_partition_name
+```
+
+## Complete Training Workflow
+
+Here's the complete workflow from dataset to inference:
+
+<Steps>
+  <Step title="Prepare Dataset">
+    ```bash
+    # Download and process VoxPopuli
+    python -m voxpopuli.download_audios --root /data/voxpopuli --subset 400k
+    python -m voxpopuli.get_unlabelled_data --root /data/voxpopuli --subset 400k
+    
+    # Create manifest
+    python -m audiocraft.data.audio_dataset \
+      /data/voxpopuli \
+      /data/audiocraft/egs/voxpopuli/data.jsonl.gz
+    ```
+  </Step>
+  
+  <Step title="Create Configuration">
+    ```yaml
+    # configs/dset/audio/voxpopuli.yaml
+    datasource:
+      max_sample_rate: 16000
+      max_channels: 1
+      train: egs/voxpopuli
+      valid: egs/voxpopuli
+      evaluate: egs/voxpopuli
+      generate: egs/voxpopuli
+    ```
+  </Step>
+  
+  <Step title="Run Training">
+    ```bash
+    AUDIOCRAFT_CONFIG=my_config.yaml dora run \
+      solver=watermark/robustness \
+      dset=audio/voxpopuli \
+      +dummy_watermarker.nbits=16
+    ```
+  </Step>
+  
+  <Step title="Evaluate Checkpoint">
+    ```bash
+    AUDIOCRAFT_CONFIG=my_config.yaml dora run \
+      solver=watermark/robustness \
+      execute_only=evaluate \
+      dset=audio/voxpopuli \
+      continue_from=[DORA_DIR]/xps/[HASH]/checkpoint_best.th
+    ```
+  </Step>
+  
+  <Step title="Convert for Inference">
+    ```bash
+    python src/scripts/checkpoints.py \
+      --checkpoint=[DORA_DIR]/xps/[HASH]/checkpoint_best.th \
+      --outdir=./models \
+      --suffix=custom_16bit
+    ```
+  </Step>
+  
+  <Step title="Use in Production">
+    ```python
+    from audioseal import AudioSeal
+    
+    model = AudioSeal.load_generator("./models/generator_custom_16bit.pth", nbits=16)
+    detector = AudioSeal.load_detector("./models/detector_custom_16bit.pth", nbits=16)
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Attack Robustness" icon="shield" href="/guides/attack-robustness">
+    Learn how to evaluate your model's robustness against attacks
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api-reference/introduction">
+    Explore the complete API for model loading and usage
+  </Card>
+</CardGroup>

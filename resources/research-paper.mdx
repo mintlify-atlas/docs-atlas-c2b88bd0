@@ -1,0 +1,249 @@
+---
+title: Research Paper
+description: Academic publication, citations, and related research on AudioSeal
+---
+
+AudioSeal is based on peer-reviewed research published at ICML 2024. This page provides information about the paper, citations, and related work.
+
+## Paper Details
+
+### Publication Information
+
+<Card title="Proactive Detection of Voice Cloning with Localized Watermarking" icon="file-lines">
+  **Authors**: Robin San Roman, Pierre Fernandez, Hady Elsahar, Alexandre Défossez, Teddy Furon, Tuan Tran
+  
+  **Conference**: International Conference on Machine Learning (ICML) 2024
+  
+  **Acceptance**: May 31, 2024
+  
+  **arXiv**: [2401.17264](https://arxiv.org/abs/2401.17264)
+</Card>
+
+### Quick Links
+
+<CardGroup cols={2}>
+  <Card title="arXiv Paper" icon="file-pdf" href="https://arxiv.org/abs/2401.17264">
+    Read the full paper on arXiv
+  </Card>
+  
+  <Card title="Project Webpage" icon="globe" href="https://pierrefdz.github.io/publications/audioseal/">
+    Interactive demos and visualizations
+  </Card>
+  
+  <Card title="Official Blog" icon="newspaper" href="https://about.fb.com/news/2024/06/releasing-new-ai-research-models-to-accelerate-innovation-at-scale/">
+    Meta AI announcement and overview
+  </Card>
+  
+  <Card title="Press Coverage" icon="microphone" href="https://www.technologyreview.com/2024/06/18/1094009/meta-has-created-a-way-to-watermark-ai-generated-speech/">
+    MIT Technology Review article
+  </Card>
+</CardGroup>
+
+## Abstract
+
+AudioSeal introduces a novel audio watermarking technique using **localized watermarking** and a novel perceptual loss. The method jointly trains two components:
+
+1. **Generator**: Embeds an imperceptible watermark into audio
+2. **Detector**: Identifies watermark fragments in long or edited audio files
+
+### Key Innovations
+
+<AccordionGroup>
+  <Accordion title="Localized Watermarking">
+    AudioSeal performs watermarking at the sample level (1/16,000 of a second), enabling precise detection even in heavily edited audio. This localized approach allows identification of which specific segments of audio contain watermarks, making it robust against:
+    
+    - Audio splicing and editing
+    - Concatenation with non-watermarked audio
+    - Partial audio extraction
+    
+    The model works well with multiple sampling rates including 16kHz, 24kHz, 44.1kHz, and 48kHz.
+  </Accordion>
+
+  <Accordion title="Perceptual Quality">
+    AudioSeal uses a novel perceptual loss function that ensures watermarks remain imperceptible to human listeners while maintaining detectability. The watermarking process:
+    
+    - Has minimal impact on audio quality
+    - Preserves the naturalness of speech and music
+    - Maintains audio fidelity across different content types
+  </Accordion>
+
+  <Accordion title="Robustness">
+    The model demonstrates state-of-the-art robustness against various audio manipulations:
+    
+    - **Compression**: MP3, AAC, Opus at various bitrates
+    - **Re-encoding**: Multiple encode-decode cycles
+    - **Noise addition**: Background noise, distortion
+    - **Re-sampling**: Sample rate conversions
+    - **Speed changes**: Time stretching and compression
+    - **Filtering**: Low-pass, high-pass, band-pass filters
+  </Accordion>
+
+  <Accordion title="Detection Speed">
+    AudioSeal achieves detection speeds **two orders of magnitude faster** than existing models through:
+    
+    - Single-pass detection architecture
+    - Efficient neural network design
+    - Optimized inference pipeline
+    - Real-time processing capabilities
+    
+    This makes AudioSeal ideal for large-scale and real-time applications where millions of audio files need to be processed.
+  </Accordion>
+</AccordionGroup>
+
+## Citation
+
+If you use AudioSeal in your research, please cite:
+
+```bibtex
+@article{sanroman2024proactive,
+  title={Proactive Detection of Voice Cloning with Localized Watermarking},
+  author={San Roman, Robin and Fernandez, Pierre and Elsahar, Hady and D\'efossez, Alexandre and Furon, Teddy and Tran, Tuan},
+  journal={ICML},
+  year={2024}
+}
+```
+
+<Note>
+  Please use this citation format in academic papers, technical reports, and publications that build upon or evaluate AudioSeal.
+</Note>
+
+## Key Contributions
+
+The paper makes several significant contributions to the field of audio watermarking:
+
+### 1. Novel Architecture
+- First localized audio watermarking system operating at sample-level precision
+- Joint training of generator and detector for optimal performance
+- Efficient neural network design enabling real-time processing
+
+### 2. Perceptual Loss Function
+- Custom loss function balancing imperceptibility and robustness
+- Multi-scale perceptual evaluation
+- Quality preservation across diverse audio content
+
+### 3. Optional Message Embedding
+- Support for 16-bit secret messages (65,536 possible values)
+- Message embedding without affecting detection performance
+- Useful for model versioning and content tracking
+
+### 4. Comprehensive Evaluation
+- Extensive robustness testing against common attacks
+- Comparison with state-of-the-art methods
+- Speed benchmarks demonstrating 100x improvement
+
+### 5. Open Source Release
+- Full implementation released under MIT license
+- Pre-trained models on Hugging Face Hub
+- Training code and evaluation tools provided
+
+## Related Work
+
+The AudioSeal team has also developed other open-source watermarking solutions for different media types:
+
+<CardGroup cols={2}>
+  <Card title="WMAR" icon="image" href="https://github.com/facebookresearch/wmar">
+    **Autoregressive watermarking for images**
+    
+    Advanced image watermarking using autoregressive models for imperceptible and robust watermark embedding.
+  </Card>
+  
+  <Card title="Video Seal" icon="video" href="https://github.com/facebookresearch/videoseal">
+    **Open and efficient video watermarking**
+    
+    Extend watermarking techniques to video content with temporal consistency and efficient processing.
+  </Card>
+  
+  <Card title="WAM" icon="wand-magic-sparkles" href="https://github.com/facebookresearch/watermark-anything">
+    **Watermark Anything with Localization**
+    
+    General-purpose watermarking framework that can be applied to any image with localization capabilities.
+  </Card>
+</CardGroup>
+
+<Note>
+  These projects share similar design philosophies emphasizing robustness, imperceptibility, and open-source availability.
+</Note>
+
+## Use Cases
+
+The research enables several practical applications:
+
+### Voice Cloning Detection
+Proactively detect AI-generated voice clones by watermarking synthetic speech at generation time.
+
+### Content Authentication
+Verify the authenticity of audio recordings by checking for watermarks embedded by trusted sources.
+
+### Copyright Protection
+Protect audio content from unauthorized distribution while maintaining audio quality.
+
+### Model Version Tracking
+Embed model version information in generated audio for traceability and accountability.
+
+### Forensic Analysis
+Identify which portions of edited audio contain watermarks for forensic investigations.
+
+## Press and Media Coverage
+
+<Card title="MIT Technology Review" icon="newspaper" href="https://www.technologyreview.com/2024/06/18/1094009/meta-has-created-a-way-to-watermark-ai-generated-speech/">
+  **"Meta has created a way to watermark AI-generated speech"**
+  
+  June 18, 2024
+  
+  In-depth coverage of AudioSeal's technology and implications for AI-generated content detection.
+</Card>
+
+### Additional Coverage
+
+- **Meta AI Blog**: [Releasing new AI research models to accelerate innovation at scale](https://about.fb.com/news/2024/06/releasing-new-ai-research-models-to-accelerate-innovation-at-scale/)
+- **Project Webpage**: [Interactive demos and technical details](https://pierrefdz.github.io/publications/audioseal/)
+
+## Updates and Timeline
+
+<Steps>
+  <Step title="January 2024">
+    Initial paper submitted to arXiv (2401.17264)
+  </Step>
+  
+  <Step title="April 2024">
+    License updated to full MIT license for code and model weights, enabling commercial use
+  </Step>
+  
+  <Step title="May 2024">
+    Paper accepted at ICML 2024
+  </Step>
+  
+  <Step title="June 2024">
+    Training code released with comprehensive documentation
+  </Step>
+  
+  <Step title="December 2024">
+    AudioSeal 0.2 released with streaming support and improvements
+  </Step>
+</Steps>
+
+## Technical Resources
+
+For researchers and developers:
+
+- **Paper**: [arXiv:2401.17264](https://arxiv.org/abs/2401.17264)
+- **Code**: [GitHub Repository](https://github.com/facebookresearch/audioseal)
+- **Models**: [Hugging Face Hub](https://huggingface.co/facebook/audioseal)
+- **Training Guide**: [TRAINING.md](https://github.com/facebookresearch/audioseal/blob/master/docs/TRAINING.md)
+- **Examples**: [Jupyter Notebooks](https://github.com/facebookresearch/audioseal/tree/master/examples)
+
+<Warning>
+  When using AudioSeal for research, ensure you cite the paper and acknowledge the use of pre-trained models from Meta AI.
+</Warning>
+
+## Contact and Collaboration
+
+For research collaborations, questions about the paper, or technical discussions:
+
+- Open an issue on [GitHub](https://github.com/facebookresearch/audioseal/issues)
+- Visit the [project webpage](https://pierrefdz.github.io/publications/audioseal/)
+- Check the [Discussions](https://github.com/facebookresearch/audioseal/discussions) section
+
+<Note>
+  The research team welcomes contributions, bug reports, and suggestions for improvements. See the [Contributing Guide](https://github.com/facebookresearch/audioseal/blob/master/CONTRIBUTING.md) for details.
+</Note>
