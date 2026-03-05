@@ -1,0 +1,92 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "AudioSeal",
+  "projectDescription": "Localized watermarking for AI-generated speech audios with state-of-the-art robustness and fast detection",
+  "theme": "aspen",
+  "primaryColor": "#dedede",
+  "lightColor": "#fbde58",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/how-it-works",
+              "concepts/watermark-generation",
+              "concepts/watermark-detection",
+              "concepts/localized-watermarking"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/basic-usage",
+              "guides/streaming-support",
+              "guides/secret-messages",
+              "guides/training-custom-models",
+              "guides/attack-robustness"
+            ]
+          },
+          {
+            "group": "Resources",
+            "pages": [
+              "resources/troubleshooting",
+              "resources/examples",
+              "resources/research-paper"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Classes",
+            "pages": [
+              "api/audioseal",
+              "api/generator",
+              "api/detector"
+            ]
+          },
+          {
+            "group": "Components",
+            "pages": [
+              "api/msg-processor",
+              "api/normalization-processor"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Localized watermarking at sample level (1/16,000 second)",
+    "State-of-the-art robustness against compression and audio edits",
+    "Fast single-pass detection (2 orders of magnitude faster)",
+    "Minimal impact on audio quality",
+    "Streaming support for real-time applications",
+    "Optional 16-bit secret message embedding"
+  ],
+  "publicApiSurface": [
+    "AudioSeal.load_generator()",
+    "AudioSeal.load_detector()",
+    "AudioSealWM.get_watermark()",
+    "AudioSealWM.forward()",
+    "AudioSealWM.streaming()",
+    "AudioSealDetector.detect_watermark()",
+    "AudioSealDetector.decode_message()",
+    "MsgProcessor",
+    "NormalizationProcessor"
+  ]
+}
